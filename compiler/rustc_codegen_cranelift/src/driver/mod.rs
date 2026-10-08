@@ -14,7 +14,7 @@ pub(crate) mod aot;
 #[cfg(feature = "jit")]
 pub(crate) mod jit;
 
-fn predefine_mono_items<'tcx>(
+pub fn predefine_mono_items<'tcx>(
     tcx: TyCtxt<'tcx>,
     module: &mut dyn Module,
     mono_items: &[(MonoItem<'tcx>, MonoItemData)],

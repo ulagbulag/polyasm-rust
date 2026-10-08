@@ -461,6 +461,8 @@ impl<'tcx> interpret::Machine<'tcx> for CompileTimeMachine<'tcx> {
             }
         }
 
+        ecx.tcx.check_external_instance(instance);
+
         // This is a const fn. Call it.
         // In case of replacement, we return the *original* instance to make backtraces work out
         // (and we hope this does not confuse the FnAbi checks too much).

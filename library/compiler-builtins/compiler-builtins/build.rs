@@ -32,6 +32,7 @@ fn main() {
     // Forcibly enable memory intrinsics on wasm & SGX as we don't have a libc to
     // provide them.
     if (cfg.target_triple.contains("wasm") && !cfg.target_triple.contains("wasi"))
+        || cfg.target_triple.contains("polyasm")
         || (cfg.target_triple.contains("sgx") && cfg.target_triple.contains("fortanix"))
         || cfg.target_triple.contains("-none")
         || cfg.target_triple.contains("nvptx")
@@ -144,6 +145,10 @@ fn configure_check_cfg() {
     // Rustc is unaware of sparc target features, but this does show up from
     // `rustc --print target-features --target sparc64-unknown-linux-gnu`.
     println!("cargo::rustc-check-cfg=cfg(target_feature, values(\"vis3\"))");
+
+    // The PolyASM targets of the PolyASM compiler, whose memory functions call
+    // the memory extension set.
+    println!("cargo::rustc-check-cfg=cfg(target_arch, values(\"polyasm\"))");
 }
 
 #[cfg(feature = "c")]

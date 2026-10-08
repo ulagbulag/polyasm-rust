@@ -807,6 +807,7 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
     fn visit_potentially_region_dependent_goals(&mut self) {
         let obligations = self.fcx.take_hir_typeck_potentially_region_dependent_goals();
         if self.fcx.tainted_by_errors().is_none() {
+            let mut retained = FxHashSet::default();
             for obligation in obligations {
                 let (predicate, mut cause) = self
                     .fcx
@@ -818,6 +819,9 @@ impl<'cx, 'tcx> WritebackCx<'cx, 'tcx> {
                     );
                 } else {
                     let predicate = self.tcx().erase_and_anonymize_regions(predicate);
+                    if !self.tcx().retain_external_goal(predicate, cause.span, cause.body_def_id, &mut retained) {
+                        continue;
+                    }
                     if cause.has_infer() || cause.has_placeholders() {
                         // We can't use the obligation cause as it references
                         // information local to this query.

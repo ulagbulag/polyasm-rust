@@ -57,7 +57,7 @@ fn codegen_field<'tcx>(
 
 /// A read-only value
 #[derive(Debug, Copy, Clone)]
-pub(crate) struct CValue<'tcx>(CValueInner, TyAndLayout<'tcx>);
+pub struct CValue<'tcx>(CValueInner, TyAndLayout<'tcx>);
 
 #[derive(Debug, Copy, Clone)]
 enum CValueInner {
@@ -67,7 +67,7 @@ enum CValueInner {
 }
 
 impl<'tcx> CValue<'tcx> {
-    pub(crate) fn by_ref(ptr: Pointer, layout: TyAndLayout<'tcx>) -> CValue<'tcx> {
+    pub fn by_ref(ptr: Pointer, layout: TyAndLayout<'tcx>) -> CValue<'tcx> {
         CValue(CValueInner::ByRef(ptr, None), layout)
     }
 
@@ -79,11 +79,11 @@ impl<'tcx> CValue<'tcx> {
         CValue(CValueInner::ByRef(ptr, Some(meta)), layout)
     }
 
-    pub(crate) fn by_val(value: Value, layout: TyAndLayout<'tcx>) -> CValue<'tcx> {
+    pub fn by_val(value: Value, layout: TyAndLayout<'tcx>) -> CValue<'tcx> {
         CValue(CValueInner::ByVal(value), layout)
     }
 
-    pub(crate) fn by_val_pair(
+    pub fn by_val_pair(
         value: Value,
         extra: Value,
         layout: TyAndLayout<'tcx>,
@@ -94,17 +94,17 @@ impl<'tcx> CValue<'tcx> {
     /// Create an instance of a ZST
     ///
     /// The ZST is represented by a dangling pointer of suitable alignment.
-    pub(crate) fn zst(layout: TyAndLayout<'tcx>) -> CValue<'tcx> {
+    pub fn zst(layout: TyAndLayout<'tcx>) -> CValue<'tcx> {
         assert!(layout.is_zst());
         CValue::by_ref(crate::Pointer::dangling(layout.align.abi), layout)
     }
 
-    pub(crate) fn layout(&self) -> TyAndLayout<'tcx> {
+    pub fn layout(&self) -> TyAndLayout<'tcx> {
         self.1
     }
 
     // FIXME remove
-    pub(crate) fn force_stack(self, fx: &mut FunctionCx<'_, '_, 'tcx>) -> (Pointer, Option<Value>) {
+    pub fn force_stack(self, fx: &mut FunctionCx<'_, '_, 'tcx>) -> (Pointer, Option<Value>) {
         let layout = self.1;
         match self.0 {
             CValueInner::ByRef(ptr, meta) => (ptr, meta),
@@ -125,7 +125,7 @@ impl<'tcx> CValue<'tcx> {
 
     /// Load a value with layout.backend_repr of scalar
     #[track_caller]
-    pub(crate) fn load_scalar(self, fx: &mut FunctionCx<'_, '_, 'tcx>) -> Value {
+    pub fn load_scalar(self, fx: &mut FunctionCx<'_, '_, 'tcx>) -> Value {
         let layout = self.1;
         match self.0 {
             CValueInner::ByRef(ptr, None) => {
@@ -171,7 +171,7 @@ impl<'tcx> CValue<'tcx> {
         }
     }
 
-    pub(crate) fn value_field(
+    pub fn value_field(
         self,
         fx: &mut FunctionCx<'_, '_, 'tcx>,
         field: FieldIdx,
@@ -203,7 +203,7 @@ impl<'tcx> CValue<'tcx> {
 
     /// Like [`CValue::value_field`] except handling ADTs containing a single array field in a way
     /// such that you can access individual lanes.
-    pub(crate) fn value_lane(
+    pub fn value_lane(
         self,
         fx: &mut FunctionCx<'_, '_, 'tcx>,
         lane_idx: u64,
@@ -253,7 +253,7 @@ impl<'tcx> CValue<'tcx> {
     }
 
     /// Like [`CValue::value_lane`] except allowing a dynamically calculated lane index.
-    pub(crate) fn value_lane_dyn(
+    pub fn value_lane_dyn(
         self,
         fx: &mut FunctionCx<'_, '_, 'tcx>,
         lane_idx: Value,
@@ -348,7 +348,7 @@ impl<'tcx> CValue<'tcx> {
 
 /// A place where you can write a value to or read a value from
 #[derive(Debug, Copy, Clone)]
-pub(crate) struct CPlace<'tcx> {
+pub struct CPlace<'tcx> {
     inner: CPlaceInner,
     layout: TyAndLayout<'tcx>,
 }
@@ -361,7 +361,7 @@ enum CPlaceInner {
 }
 
 impl<'tcx> CPlace<'tcx> {
-    pub(crate) fn layout(&self) -> TyAndLayout<'tcx> {
+    pub fn layout(&self) -> TyAndLayout<'tcx> {
         self.layout
     }
 
@@ -472,7 +472,7 @@ impl<'tcx> CPlace<'tcx> {
     }
 
     #[track_caller]
-    pub(crate) fn to_ptr(self) -> Pointer {
+    pub fn to_ptr(self) -> Pointer {
         match self.inner {
             CPlaceInner::Addr(ptr, None) => ptr,
             CPlaceInner::Addr(_, Some(_)) => bug!("Expected sized cplace, found {:?}", self),
@@ -500,7 +500,7 @@ impl<'tcx> CPlace<'tcx> {
         }
     }
 
-    pub(crate) fn write_cvalue(self, fx: &mut FunctionCx<'_, '_, 'tcx>, from: CValue<'tcx>) {
+    pub fn write_cvalue(self, fx: &mut FunctionCx<'_, '_, 'tcx>, from: CValue<'tcx>) {
         assert_assignable(fx, from.layout().ty, self.layout().ty, 16);
 
         self.write_cvalue_maybe_transmute(fx, from, "write_cvalue");
@@ -611,6 +611,11 @@ impl<'tcx> CPlace<'tcx> {
                         }
                     },
                     CValueInner::ByRef(from_ptr, None) => {
+                        if let Some(f) = fx.tcx.sess.extensions.get::<crate::extensions::Providers>().and_then(|e| e.copy_value)
+                            && f(fx, to_ptr, from, flags)
+                        {
+                            return;
+                        }
                         match from.layout().backend_repr {
                             BackendRepr::Scalar(_) => {
                                 let val = from.load_scalar(fx);
@@ -702,7 +707,7 @@ impl<'tcx> CPlace<'tcx> {
 
     /// Like [`CPlace::place_field`] except handling ADTs containing a single array field in a way
     /// such that you can access individual lanes.
-    pub(crate) fn place_lane(
+    pub fn place_lane(
         self,
         fx: &mut FunctionCx<'_, '_, 'tcx>,
         lane_idx: u64,
@@ -841,7 +846,7 @@ impl<'tcx> CPlace<'tcx> {
 }
 
 #[track_caller]
-pub(crate) fn assert_assignable<'tcx>(
+pub fn assert_assignable<'tcx>(
     fx: &FunctionCx<'_, '_, 'tcx>,
     from_ty: Ty<'tcx>,
     to_ty: Ty<'tcx>,

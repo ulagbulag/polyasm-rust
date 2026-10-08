@@ -1532,4 +1532,10 @@ pub enum AttributeKind {
     /// Represents `#[windows_subsystem]`.
     WindowsSubsystem(WindowsSubsystemKind),
     // tidy-alphabetical-end
+
+    /// Represents the extension function of PolyASM that `core::polyasm::extension` marks.
+    RustcPolyasmExtension {
+        namespace: Symbol,
+        name: Symbol,
+    },
 }

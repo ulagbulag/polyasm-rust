@@ -238,6 +238,9 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         let self_ty = self.infcx.shallow_resolve(
             self.infcx.enter_forall_and_leak_universe(obligation.predicate.self_ty()),
         );
+        if tcx.is_external_builtin_trait(trait_def) {
+            return Default::default();
+        }
         let types = match tcx.as_lang_item(trait_def) {
             Some(LangItem::Sized) => self.sizedness_conditions(self_ty, SizedTraitKind::Sized),
             Some(LangItem::MetaSized) => {

@@ -56,6 +56,29 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
 
         let mut candidates = SelectionCandidateSet { vec: Vec::new(), ambiguous: false };
 
+        let extension_decision = if obligation.polarity() == ty::ClausePolarity::Positive {
+            self.tcx().external_trait_decision(obligation.predicate.skip_binder().trait_ref)
+        } else {
+            None
+        };
+        match extension_decision {
+            None => {}
+            Some(Ok(true)) => {
+                candidates.vec.push(BuiltinCandidate);
+                return Ok(candidates);
+            }
+            Some(Err(())) => {
+                self.assemble_candidates_for_trait_alias(obligation, &mut candidates);
+                self.assemble_candidates_from_impls(obligation, &mut candidates);
+                self.assemble_candidates_from_caller_bounds(stack, &mut candidates)?;
+                if candidates.vec.is_empty() {
+                    candidates.ambiguous = true;
+                }
+                return Ok(candidates);
+            }
+            Some(Ok(false)) => return Ok(candidates),
+        }
+
         // Negative trait predicates have different rules than positive trait predicates.
         if obligation.polarity() == ty::ClausePolarity::Negative {
             self.assemble_candidates_for_trait_alias(obligation, &mut candidates);

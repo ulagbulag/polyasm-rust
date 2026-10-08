@@ -326,8 +326,8 @@ impl<'tcx> Inliner<'tcx> for NormalInliner<'tcx> {
         self.changed
     }
 
-    fn should_inline_for_callee(&self, _: DefId) -> bool {
-        true
+    fn should_inline_for_callee(&self, def_id: DefId) -> bool {
+        self.tcx.external_inline_policy(self.caller_def_id(), def_id, false).is_ok()
     }
 
     fn check_codegen_attributes_extra(
@@ -552,6 +552,10 @@ fn resolve_callsite<'tcx, I: Inliner<'tcx>>(
                 .unwrap();
             let mut callee =
                 Instance::try_resolve(tcx, inliner.typing_env(), def_id, args).ok().flatten()?;
+            if !inliner.should_inline_for_callee(callee.def_id()) {
+                return None;
+            }
+
 
             if let InstanceKind::Virtual(..) = callee.def {
                 return None;
@@ -806,6 +810,10 @@ fn check_codegen_attributes<'tcx, I: Inliner<'tcx>>(
     callee_attrs: &CodegenFnAttrs,
 ) -> Result<(), &'static str> {
     let tcx = inliner.tcx();
+    tcx.external_inline_policy(
+        inliner.caller_def_id(), callsite.callee.def_id(),
+        matches!(callee_attrs.inline, InlineAttr::Force { .. }),
+    )?;
     if let InlineAttr::Never = callee_attrs.inline {
         return Err("never inline attribute");
     }

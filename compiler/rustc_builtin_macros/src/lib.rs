@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use rustc_expand::base::{MacroExpanderFn, ResolverExpand, SyntaxExtensionKind};
 use rustc_expand::proc_macro::BangProcMacro;
-use rustc_span::sym;
+use rustc_span::{Symbol, sym};
 
 use crate::deriving::*;
 
@@ -46,6 +46,7 @@ mod iter;
 mod log_syntax;
 mod offload;
 mod pattern_type;
+mod polyasm;
 mod source_util;
 mod test;
 mod test_binder_constraints;
@@ -154,4 +155,7 @@ pub fn register_builtin_macros(resolver: &mut dyn ResolverExpand) {
     register(sym::contracts_requires, requires);
     let ensures = SyntaxExtensionKind::Attr(Arc::new(contracts::ExpandEnsures));
     register(sym::contracts_ensures, ensures);
+    let extension = SyntaxExtensionKind::AstAttr(Arc::new(polyasm::expand));
+    #[allow(rustc::symbol_intern_string_literal)]
+    register(Symbol::intern("polyasm_extension"), extension);
 }

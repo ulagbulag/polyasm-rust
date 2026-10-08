@@ -51,6 +51,9 @@ impl<'ast, 'tcx> LanguageItemCollector<'ast, 'tcx> {
         generics: Option<&'ast ast::Generics>,
     ) {
         if let Some((name, attr_span)) = extract_ast(attrs) {
+            if self.tcx.sess.extensions.lang_items.contains(&name.as_str()) {
+                return;
+            }
             match LangItem::from_name(name) {
                 // Known lang item
                 Some(lang_item) => {

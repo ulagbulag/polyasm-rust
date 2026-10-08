@@ -36,7 +36,7 @@ use crate::{MemFlags, meth};
 // can happen when BB jumps directly to its successor and the successor has no
 // other predecessors.
 #[derive(Debug, PartialEq)]
-enum MergingSucc {
+pub enum MergingSucc {
     False,
     True,
 }
@@ -44,16 +44,16 @@ enum MergingSucc {
 /// Indicates to the call terminator codegen whether a call
 /// is a normal call or an explicit tail call.
 #[derive(Debug, PartialEq)]
-enum CallKind {
+pub enum CallKind {
     Normal,
     Tail,
 }
 
 /// Used by `FunctionCx::codegen_terminator` for emitting common patterns
 /// e.g., creating a basic block, calling a function, etc.
-struct TerminatorCodegenHelper<'tcx> {
-    bb: mir::BasicBlock,
-    terminator: &'tcx mir::Terminator<'tcx>,
+pub struct TerminatorCodegenHelper<'tcx> {
+    pub bb: mir::BasicBlock,
+    pub terminator: &'tcx mir::Terminator<'tcx>,
 }
 
 impl<'a, 'tcx> TerminatorCodegenHelper<'tcx> {
@@ -134,7 +134,7 @@ impl<'a, 'tcx> TerminatorCodegenHelper<'tcx> {
         }
     }
 
-    fn funclet_br<Bx: BuilderMethods<'a, 'tcx>>(
+    pub fn funclet_br<Bx: BuilderMethods<'a, 'tcx>>(
         &self,
         fx: &mut FunctionCx<'a, 'tcx, Bx>,
         bx: &mut Bx,
@@ -167,7 +167,7 @@ impl<'a, 'tcx> TerminatorCodegenHelper<'tcx> {
     /// The `return_slot` is [`ReturnSlot::Indirect`] for functions returning
     /// via `PassMode::Indirect`, and points to a buffer where the return value
     /// shall be stored.
-    fn do_call<Bx: BuilderMethods<'a, 'tcx>>(
+    pub fn do_call<Bx: BuilderMethods<'a, 'tcx>>(
         &self,
         fx: &mut FunctionCx<'a, 'tcx, Bx>,
         bx: &mut Bx,
@@ -285,6 +285,7 @@ impl<'a, 'tcx> TerminatorCodegenHelper<'tcx> {
                 self.funclet(fx),
                 instance,
             );
+            bx.apply_extension_call_attrs(fx, self, instance, invokeret, fn_ptr);
             if fx.mir[self.bb].is_cleanup {
                 bx.apply_attrs_to_cleanup_callsite(invokeret);
             }
@@ -315,6 +316,7 @@ impl<'a, 'tcx> TerminatorCodegenHelper<'tcx> {
                 self.funclet(fx),
                 instance,
             );
+            bx.apply_extension_call_attrs(fx, self, instance, llret, fn_ptr);
             if fx.mir[self.bb].is_cleanup {
                 bx.apply_attrs_to_cleanup_callsite(llret);
             }
@@ -975,6 +977,11 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         mergeable_succ: bool,
     ) -> MergingSucc {
         let source_info = mir::SourceInfo { span: fn_span, ..terminator.source_info };
+        if let Some(result) = Bx::codegen_extension_call(
+            self, &helper, bx, func, args, destination, target, unwind, source_info, &kind, mergeable_succ,
+        ) {
+            return result;
+        }
 
         // Create the callee. This is a fn ptr or zero-sized and hence a kind of scalar.
         let callee = self.codegen_operand(bx, func);
@@ -1964,7 +1971,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         }
     }
 
-    fn codegen_argument(
+    pub fn codegen_argument(
         &mut self,
         bx: &mut Bx,
         conv: CanonAbi,
@@ -2187,7 +2194,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         tuple.layout.fields.count()
     }
 
-    pub(super) fn get_caller_location(
+    pub fn get_caller_location(
         &mut self,
         bx: &mut Bx,
         source_info: mir::SourceInfo,
@@ -2451,7 +2458,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         }
     }
 
-    fn make_return_dest(
+    pub fn make_return_dest(
         &mut self,
         bx: &mut Bx,
         dest: mir::Place<'tcx>,
@@ -2553,7 +2560,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
     }
 }
 
-enum ReturnDest<'tcx, V> {
+pub enum ReturnDest<'tcx, V> {
     /// Do nothing; the return value is indirect or ignored.
     Nothing,
     /// Store the return value to the pointer.

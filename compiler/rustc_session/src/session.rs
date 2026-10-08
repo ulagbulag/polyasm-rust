@@ -326,6 +326,7 @@ impl PointerAuthConfig {
 /// Partial session built before the full session. More specifically, `EarlySession` is used to
 /// init the codegen backend, and then both pieces are used to build the full `Session`.
 pub struct EarlySession {
+    pub extensions: crate::extensions::Extensions,
     pub target: Target,
     pub host: Target,
     pub opts: config::Options,
@@ -1383,7 +1384,7 @@ pub fn build_early_session(
 
     let psess = ParseSess::with_dcx(dcx, source_map);
 
-    EarlySession { target, host, opts: sopts, psess }
+    EarlySession { target, host, opts: sopts, psess, extensions: Default::default() }
 }
 
 // JUSTIFICATION: literally session construction
@@ -1396,7 +1397,7 @@ pub fn build_session(
     cfg_version: &'static str,
     using_internal_features: &'static AtomicBool,
 ) -> Session {
-    let EarlySession { target, host, opts: sopts, psess } = &early_sess;
+    let EarlySession { target, host, opts: sopts, psess, .. } = &early_sess;
     let dcx = psess.dcx();
 
     let wasm_proc_macro_tuple = TargetTuple::from_tuple("wasm32-wasip2");

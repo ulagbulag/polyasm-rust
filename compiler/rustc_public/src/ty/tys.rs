@@ -875,6 +875,7 @@ pub enum Abi {
     RustTail,
     RustInvalid,
     Custom,
+    Polyasm,
     Swift,
 }
 

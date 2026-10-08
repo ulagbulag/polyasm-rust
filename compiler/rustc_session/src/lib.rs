@@ -23,6 +23,7 @@ pub mod parse;
 pub mod utils;
 #[macro_use]
 pub mod config;
+pub mod extensions;
 pub mod filesearch;
 mod macros;
 mod options;

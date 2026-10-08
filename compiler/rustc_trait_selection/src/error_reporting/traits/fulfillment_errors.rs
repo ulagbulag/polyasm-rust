@@ -324,6 +324,14 @@ impl<'a, 'tcx> TypeErrCtxt<'a, 'tcx> {
                         };
 
                         let mut err = struct_span_code_err!(self.dcx(), span, E0277, "{}", err_msg);
+                        if let Some((failure_span, message)) = self.tcx.external_trait_rejection(
+                            leaf_trait_predicate.skip_binder().trait_ref, span,
+                        ) {
+                            err.span_note(failure_span, message);
+                            self.note_obligation_cause(&mut err, &obligation);
+                            return err.emit_err();
+                        }
+
 
                         let trait_def_id = main_trait_predicate.def_id();
                         let leaf_trait_def_id = leaf_trait_predicate.def_id();

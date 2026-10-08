@@ -129,6 +129,11 @@ impl<'ll, 'tcx> IntrinsicCallBuilderMethods<'tcx> for Builder<'_, 'll, 'tcx> {
         result_place: Option<PlaceValue<&'ll Value>>,
         span: Span,
     ) -> IntrinsicResult<'tcx, &'ll Value> {
+        if let Some(extension) = self.tcx.sess.extensions.get::<crate::extensions::Providers>()
+            && let Some(result) = (extension.intrinsic)(self, instance, args, result_layout, result_place, span)
+        {
+            return result;
+        }
         let tcx = self.tcx;
         let llvm_version = crate::llvm_util::get_version();
 

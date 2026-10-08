@@ -77,6 +77,31 @@ pub trait BuilderMethods<'a, 'tcx>:
             DIVariable = Self::DIVariable,
         >;
 
+    fn codegen_extension_call(
+        _fx: &mut crate::mir::FunctionCx<'a, 'tcx, Self>,
+        _helper: &crate::mir::block::TerminatorCodegenHelper<'tcx>,
+        _bx: &mut Self,
+        _func: &mir::Operand<'tcx>,
+        _args: &[rustc_span::Spanned<mir::Operand<'tcx>>],
+        _destination: mir::Place<'tcx>,
+        _target: Option<mir::BasicBlock>,
+        _unwind: mir::UnwindAction,
+        _source: mir::SourceInfo,
+        _kind: &crate::mir::block::CallKind,
+        _mergeable: bool,
+    ) -> Option<crate::mir::block::MergingSucc> {
+        None
+    }
+
+    fn apply_extension_call_attrs(
+        &mut self,
+        _fx: &crate::mir::FunctionCx<'a, 'tcx, Self>,
+        _helper: &crate::mir::block::TerminatorCodegenHelper<'tcx>,
+        _instance: Option<Instance<'tcx>>,
+        _call: Self::Value,
+        _function: Self::Value,
+    ) {}
+
     fn build(cx: &'a Self::CodegenCx, llbb: Self::BasicBlock) -> Self;
 
     fn cx(&self) -> &Self::CodegenCx;

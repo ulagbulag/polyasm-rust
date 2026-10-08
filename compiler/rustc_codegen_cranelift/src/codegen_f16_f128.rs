@@ -103,6 +103,8 @@ pub(crate) fn fcmp(fx: &mut FunctionCx<'_, '_, '_>, cc: FloatCC, lhs: Value, rhs
             fx.bcx.ins().fcmp(cc, lhs, rhs)
         }
         types::F128 => {
+            let comparison_type = fx.tcx.sess.extensions.get::<crate::extensions::Providers>()
+                .and_then(|e| e.comparison_type).map_or(CMP_RESULT_TY, |f| f(fx.tcx.sess));
             let (name, int_cc) = match cc {
                 FloatCC::Equal => ("__eqtf2", IntCC::Equal),
                 FloatCC::NotEqual => ("__netf2", IntCC::NotEqual),
@@ -115,10 +117,10 @@ pub(crate) fn fcmp(fx: &mut FunctionCx<'_, '_, '_>, cc: FloatCC, lhs: Value, rhs
             let res = fx.lib_call(
                 name,
                 vec![AbiParam::new(types::F128), AbiParam::new(types::F128)],
-                vec![AbiParam::new(CMP_RESULT_TY)],
+                vec![AbiParam::new(comparison_type)],
                 &[lhs, rhs],
             )[0];
-            let zero = fx.bcx.ins().iconst(CMP_RESULT_TY, 0);
+            let zero = fx.bcx.ins().iconst(comparison_type, 0);
             fx.bcx.ins().icmp(int_cc, res, zero)
         }
         _ => unreachable!("{ty:?}"),

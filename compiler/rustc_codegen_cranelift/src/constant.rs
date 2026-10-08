@@ -35,7 +35,7 @@ impl ConstantCx {
     }
 }
 
-pub(crate) fn codegen_static(tcx: TyCtxt<'_>, module: &mut dyn Module, def_id: DefId) -> DataId {
+pub fn codegen_static(tcx: TyCtxt<'_>, module: &mut dyn Module, def_id: DefId) -> DataId {
     let mut constants_cx = ConstantCx::new();
     constants_cx.todo.push(TodoItem::Static(def_id));
     constants_cx.finalize(tcx, module);
@@ -75,7 +75,7 @@ pub(crate) fn codegen_tls_ref<'tcx>(
     CValue::by_val(tls_ptr, layout)
 }
 
-pub(crate) fn eval_mir_constant<'tcx>(
+pub fn eval_mir_constant<'tcx>(
     fx: &FunctionCx<'_, '_, 'tcx>,
     constant: &ConstOperand<'tcx>,
 ) -> (ConstValue, Ty<'tcx>) {
@@ -95,11 +95,16 @@ pub(crate) fn codegen_constant_operand<'tcx>(
     codegen_const_value(fx, const_val, ty)
 }
 
-pub(crate) fn codegen_const_value<'tcx>(
+pub fn codegen_const_value<'tcx>(
     fx: &mut FunctionCx<'_, '_, 'tcx>,
     const_val: ConstValue,
     ty: Ty<'tcx>,
 ) -> CValue<'tcx> {
+    if let Some(f) = fx.tcx.sess.extensions.get::<crate::extensions::Providers>().and_then(|e| e.constant)
+        && let Some(value) = f(fx, const_val, ty)
+    {
+        return value;
+    }
     let layout = fx.layout_of(ty);
     assert!(layout.is_sized(), "unsized const value");
 

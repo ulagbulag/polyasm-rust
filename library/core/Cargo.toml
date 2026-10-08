@@ -42,5 +42,7 @@ check-cfg = [
     # Prevents use of a static variable for providing platform specific RawOsError
     # functionality
     'cfg(no_io_statics)',
+    # The PolyASM targets of the PolyASM compiler, which carry `core::polyasm`.
+    'cfg(target_abi, values("polyasm"))',
 
 ]

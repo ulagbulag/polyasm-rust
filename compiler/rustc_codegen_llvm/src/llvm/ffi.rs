@@ -222,9 +222,9 @@ pub(crate) enum Visibility {
 
 /// LLVMUnnamedAddr
 #[repr(C)]
-pub(crate) enum UnnamedAddr {
+pub enum UnnamedAddr {
     No,
-    #[expect(dead_code)]
+    #[allow(dead_code)]
     Local,
     Global,
 }
@@ -435,7 +435,7 @@ pub(crate) enum FileType {
 /// Must match the layout of `LLVMInlineAsmDialect`.
 #[derive(Copy, Clone, PartialEq)]
 #[repr(C)]
-pub(crate) enum AsmDialect {
+pub enum AsmDialect {
     Att,
     Intel,
 }
@@ -702,13 +702,13 @@ struct InvariantOpaque<'a> {
 // Opaque pointer types
 unsafe extern "C" {
     pub(crate) type Module;
-    pub(crate) type Context;
-    pub(crate) type Type;
-    pub(crate) type Value;
+    pub type Context;
+    pub type Type;
+    pub type Value;
     pub(crate) type ConstantInt;
-    pub(crate) type Attribute;
-    pub(crate) type Metadata;
-    pub(crate) type BasicBlock;
+    pub type Attribute;
+    pub type Metadata;
+    pub type BasicBlock;
     pub(crate) type Comdat;
     /// `&'ll DbgRecord` represents `LLVMDbgRecordRef`.
     pub(crate) type DbgRecord;

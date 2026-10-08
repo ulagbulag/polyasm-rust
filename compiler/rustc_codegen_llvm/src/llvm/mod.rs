@@ -12,8 +12,7 @@ use rustc_llvm::RustString;
 pub(crate) use self::CallConv::*;
 pub(crate) use self::CodeGenOptSize::*;
 pub(crate) use self::conversions::*;
-pub(crate) use self::ffi::*;
-pub(crate) use self::metadata_kind::*;
+pub use self::{ffi::*, metadata_kind::*};
 
 mod conversions;
 pub(crate) mod diagnostic;

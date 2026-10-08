@@ -23,7 +23,7 @@ use crate::prelude::*;
 use crate::pretty_clif::{CommentWriter, format_clif_ir_header};
 use crate::{codegen_f16_f128, enable_verifier};
 
-pub(crate) struct CodegenedFunction {
+pub struct CodegenedFunction {
     symbol_name: String,
     func_id: FuncId,
     func: Function,
@@ -32,7 +32,7 @@ pub(crate) struct CodegenedFunction {
     inline_asm: String,
 }
 
-pub(crate) fn codegen_fn<'tcx>(
+pub fn codegen_fn<'tcx>(
     tcx: TyCtxt<'tcx>,
     cgu_name: Symbol,
     mut debug_context: Option<&mut DebugContext>,
@@ -142,13 +142,17 @@ pub(crate) fn codegen_fn<'tcx>(
         );
     }
 
+    if let Some(f) = tcx.sess.extensions.get::<crate::extensions::Providers>().and_then(|e| e.optimize) {
+        f(tcx, &mut func);
+    }
+
     // Verify function
     verify_func(tcx, &clif_comments, &func);
 
     CodegenedFunction { symbol_name, func_id, func, clif_comments, func_debug_cx, inline_asm }
 }
 
-pub(crate) fn compile_fn(
+pub fn compile_fn(
     prof: &SelfProfilerRef,
     dcx: DiagCtxtHandle<'_>,
     output_filenames: &OutputFilenames,
@@ -304,6 +308,9 @@ fn codegen_fn_body(fx: &mut FunctionCx<'_, '_, '_>, start_block: Block) {
     for (bb, bb_data) in fx.mir.basic_blocks.iter_enumerated() {
         let block = fx.get_block(bb);
         fx.bcx.switch_to_block(block);
+        if let Some(f) = fx.tcx.sess.extensions.get::<crate::extensions::Providers>().and_then(|e| e.block) {
+            f(fx, bb, false);
+        }
 
         if !reachable_blocks.contains(bb) {
             // We want to skip this block, because it's not reachable. But we still create
@@ -516,6 +523,9 @@ fn codegen_fn_body(fx: &mut FunctionCx<'_, '_, '_>, start_block: Block) {
                 unwind,
                 call_source: _,
             } => {
+                if let Some(f) = fx.tcx.sess.extensions.get::<crate::extensions::Providers>().and_then(|e| e.block) {
+                    f(fx, bb, true);
+                }
                 fx.tcx.prof.generic_activity("codegen call").run(|| {
                     crate::abi::codegen_terminator_call(
                         fx,
@@ -611,6 +621,11 @@ fn codegen_stmt<'tcx>(fx: &mut FunctionCx<'_, '_, 'tcx>, cur_block: Block, stmt:
     let _print_guard = crate::PrintOnPanic(|| format!("stmt {:?}", stmt));
 
     fx.set_debug_loc(stmt.source_info);
+    if let Some(f) = fx.tcx.sess.extensions.get::<crate::extensions::Providers>().and_then(|e| e.statement)
+        && f(fx, stmt)
+    {
+        return;
+    }
 
     match &stmt.kind {
         StatementKind::StorageLive(..) | StatementKind::StorageDead(..) => {} // Those are not very useful
@@ -985,7 +1000,7 @@ fn codegen_array_len<'tcx>(fx: &mut FunctionCx<'_, '_, 'tcx>, place: CPlace<'tcx
     }
 }
 
-pub(crate) fn codegen_place<'tcx>(
+pub fn codegen_place<'tcx>(
     fx: &mut FunctionCx<'_, '_, 'tcx>,
     place: Place<'tcx>,
 ) -> CPlace<'tcx> {
@@ -1057,7 +1072,7 @@ pub(crate) fn codegen_place<'tcx>(
     cplace
 }
 
-pub(crate) fn codegen_operand<'tcx>(
+pub fn codegen_operand<'tcx>(
     fx: &mut FunctionCx<'_, '_, 'tcx>,
     operand: &Operand<'tcx>,
 ) -> CValue<'tcx> {

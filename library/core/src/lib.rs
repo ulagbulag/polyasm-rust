@@ -375,6 +375,30 @@ mod core_arch;
 #[stable(feature = "simd_arch", since = "1.27.0")]
 pub mod arch;
 
+#[stable(feature = "polyasm", since = "CURRENT_RUSTC_VERSION")]
+pub mod polyasm {
+    //! PolyASM, the CISC form of WebAssembly that `polytime` instantiates.
+
+    #[cfg(target_abi = "polyasm")]
+    #[stable(feature = "polyasm", since = "CURRENT_RUSTC_VERSION")]
+    pub mod intrinsics;
+
+    #[cfg(target_abi = "polyasm")]
+    #[stable(feature = "polyasm", since = "CURRENT_RUSTC_VERSION")]
+    pub use self::intrinsics::little_endian_pointer_mut;
+
+    /// Marks an `extern "polyasm" fn` as the function `name` of the extension
+    /// instruction set `namespace`: `#[extension(namespace, name)]` over the
+    /// function `__name`. The function takes a weak symbol, so its body stands
+    /// as the fallback, and a machine with an engine of its own for the
+    /// function spells that engine in its place.
+    #[stable(feature = "polyasm", since = "CURRENT_RUSTC_VERSION")]
+    #[rustc_builtin_macro(polyasm_extension)]
+    pub macro extension($item:item) {
+        /* compiler built-in */
+    }
+}
+
 // Pull in the `core_simd` crate directly into core. The contents of
 // `core_simd` are in a different repository: rust-lang/portable-simd.
 //

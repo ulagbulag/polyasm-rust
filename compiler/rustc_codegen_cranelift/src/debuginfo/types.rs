@@ -9,7 +9,7 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 use crate::{DebugContext, FullyMonomorphizedLayoutCx};
 
 #[derive(Default)]
-pub(crate) struct TypeDebugContext<'tcx> {
+pub struct TypeDebugContext<'tcx> {
     type_map: FxHashMap<Ty<'tcx>, UnitEntryId>,
 }
 

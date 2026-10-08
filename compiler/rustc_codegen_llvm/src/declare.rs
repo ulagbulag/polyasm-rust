@@ -129,7 +129,7 @@ impl<'ll, 'tcx> CodegenCx<'ll, 'tcx> {
     ///
     /// If there’s a value with the same name already declared, the function will
     /// update the declaration and return existing Value instead.
-    pub(crate) fn declare_cfn(
+    pub fn declare_cfn(
         &self,
         name: &str,
         unnamed: llvm::UnnamedAddr,

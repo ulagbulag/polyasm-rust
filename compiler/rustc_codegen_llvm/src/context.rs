@@ -46,8 +46,8 @@ use crate::{attributes, common, coverageinfo, debuginfo, llvm_util};
 /// However, there are various cx related functions which we want to be available to the builder and
 /// other compiler pieces. Here we define a small subset which has enough information and can be
 /// moved around more freely.
-pub(crate) struct SCx<'ll> {
-    pub llmod: &'ll llvm::Module,
+pub struct SCx<'ll> {
+    pub(crate) llmod: &'ll llvm::Module,
     pub llcx: &'ll llvm::Context,
     pub isize_ty: &'ll Type,
 }
@@ -67,7 +67,7 @@ impl<'ll, 'tcx> Deref for FullCx<'ll, 'tcx> {
     }
 }
 
-pub(crate) struct GenericCx<'ll, T: Borrow<SCx<'ll>>>(T, PhantomData<SCx<'ll>>);
+pub struct GenericCx<'ll, T: Borrow<SCx<'ll>>>(T, PhantomData<SCx<'ll>>);
 
 impl<'ll, T: Borrow<SCx<'ll>>> Deref for GenericCx<'ll, T> {
     type Target = T;
@@ -85,19 +85,19 @@ impl<'ll, T: Borrow<SCx<'ll>>> DerefMut for GenericCx<'ll, T> {
     }
 }
 
-pub(crate) type SimpleCx<'ll> = GenericCx<'ll, SCx<'ll>>;
+pub type SimpleCx<'ll> = GenericCx<'ll, SCx<'ll>>;
 
 /// There is one `CodegenCx` per codegen unit. Each one has its own LLVM
 /// `llvm::Context` so that several codegen units may be processed in parallel.
 /// All other LLVM data structures in the `CodegenCx` are tied to that `llvm::Context`.
-pub(crate) type CodegenCx<'ll, 'tcx> = GenericCx<'ll, FullCx<'ll, 'tcx>>;
+pub type CodegenCx<'ll, 'tcx> = GenericCx<'ll, FullCx<'ll, 'tcx>>;
 
-pub(crate) struct FullCx<'ll, 'tcx> {
+pub struct FullCx<'ll, 'tcx> {
     pub tcx: TyCtxt<'tcx>,
     pub bitcode_needed: bool,
     pub scx: SimpleCx<'ll>,
     pub use_dll_storage_attrs: bool,
-    pub tls_model: llvm::ThreadLocalMode,
+    pub(crate) tls_model: llvm::ThreadLocalMode,
 
     pub codegen_unit: &'tcx CodegenUnit<'tcx>,
 
@@ -134,8 +134,8 @@ pub(crate) struct FullCx<'ll, 'tcx> {
     pub scalar_lltypes: RefCell<FxHashMap<Ty<'tcx>, &'ll Type>>,
 
     /// Extra per-CGU codegen state needed when coverage instrumentation is enabled.
-    pub coverage_cx: Option<coverageinfo::CguCoverageContext<'ll, 'tcx>>,
-    pub dbg_cx: Option<debuginfo::CodegenUnitDebugContext<'ll, 'tcx>>,
+    pub(crate) coverage_cx: Option<coverageinfo::CguCoverageContext<'ll, 'tcx>>,
+    pub(crate) dbg_cx: Option<debuginfo::CodegenUnitDebugContext<'ll, 'tcx>>,
     pub sanitizer_ignorelist: Option<SanitizerIgnoreList>,
 
     eh_personality: Cell<Option<&'ll Value>>,
@@ -166,10 +166,10 @@ pub(crate) struct FullCx<'ll, 'tcx> {
     pub objc_selrefs: RefCell<FxHashMap<Symbol, &'ll Value>>,
 
     /// Globals shared by the offloading runtime
-    pub offload_globals: RefCell<Option<OffloadGlobals<'ll>>>,
+    pub(crate) offload_globals: RefCell<Option<OffloadGlobals<'ll>>>,
 
     /// Cache of kernel-specific globals
-    pub offload_kernel_cache: RefCell<FxHashMap<String, OffloadKernelGlobals<'ll>>>,
+    pub(crate) offload_kernel_cache: RefCell<FxHashMap<String, OffloadKernelGlobals<'ll>>>,
 }
 
 fn to_llvm_tls_model(tls_model: TlsModel) -> llvm::ThreadLocalMode {
@@ -914,11 +914,11 @@ impl<'ll, CX: Borrow<SCx<'ll>>> GenericCx<'ll, CX> {
         self.get_const_int(self.type_i8(), n)
     }
 
-    pub(crate) fn get_md_kind_id(&self, name: &str) -> llvm::MetadataKindId {
+    pub fn get_md_kind_id(&self, name: &str) -> llvm::MetadataKindId {
         unsafe { llvm::LLVMGetMDKindIDInContext(self.llcx(), name.as_ptr(), name.len() as c_uint) }
     }
 
-    pub(crate) fn create_metadata(&self, name: &[u8]) -> &'ll Metadata {
+    pub fn create_metadata(&self, name: &[u8]) -> &'ll Metadata {
         unsafe { llvm::LLVMMDStringInContext2(self.llcx(), name.as_ptr(), name.len()) }
     }
 
@@ -1209,7 +1209,7 @@ impl<'ll, CX: Borrow<SCx<'ll>>> GenericCx<'ll, CX> {
     /// - `LLVMMDNodeInContext2` (to create an `llvm::MDNode` from a list of metadata)
     /// - `LLVMMetadataAsValue` (to adapt that node to an `llvm::Value`)
     /// - `LLVMSetMetadata` (to set that node as metadata of `kind_id` for `instruction`)
-    pub(crate) fn set_metadata_node(
+    pub fn set_metadata_node(
         &self,
         instruction: &'ll Value,
         kind_id: MetadataKindId,

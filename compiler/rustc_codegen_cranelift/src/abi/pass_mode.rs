@@ -252,7 +252,7 @@ pub(super) fn from_casted_value<'tcx>(
 }
 
 /// Get a set of values to be passed as function arguments.
-pub(super) fn adjust_arg_for_abi<'tcx>(
+pub fn adjust_arg_for_abi<'tcx>(
     fx: &mut FunctionCx<'_, '_, 'tcx>,
     arg: CValue<'tcx>,
     arg_abi: &ArgAbi<'tcx, Ty<'tcx>>,

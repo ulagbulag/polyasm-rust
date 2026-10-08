@@ -563,6 +563,10 @@ impl SingleAttributeParser for LangParser {
     fn convert(cx: &mut AcceptContext<'_, '_>, args: &ArgParser) -> Option<AttributeKind> {
         let nv = cx.expect_name_value(args, cx.attr_span, None)?;
         let name = cx.expect_string_literal(nv)?;
+        if cx.cx.sess.extensions.lang_items.contains(&name.as_str()) {
+            cx.check_target("", &AllowedTargets::AllowList(&[Allow(cx.target)]));
+            return Some(AttributeKind::RustcDiagnosticItem(name));
+        }
         let Some(lang_item) = LangItem::from_name(name) else {
             cx.emit_err(UnknownLangItem { span: cx.attr_span, name });
             return None;

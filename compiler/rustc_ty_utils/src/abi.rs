@@ -632,6 +632,9 @@ fn fn_abi_adjust_for_abi<'tcx>(
         "fn_abi_of_instance should not be called on LLVM intrinsics"
     );
 
+    if cx.tcx().adjust_external_abi(cx, fn_abi, abi) {
+        return;
+    }
     if abi.is_rustic_abi() {
         fn_abi.adjust_for_rust_abi(cx);
     } else {

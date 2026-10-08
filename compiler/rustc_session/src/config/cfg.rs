@@ -93,6 +93,7 @@ impl<'a, T: Eq + Hash + Copy + 'a> Extend<&'a T> for ExpectedValues<T> {
 
 /// Disallow builtin cfgs from the CLI.
 pub(crate) fn disallow_cfgs(sess: &Session, user_cfgs: &Cfg) {
+    (sess.extensions.configure_user_cfg)(sess, user_cfgs);
     let disallow = |cfg: &(Symbol, Option<Symbol>), controlled_by| {
         let cfg_name = cfg.0;
         let cfg = if let Some(value) = cfg.1 {
@@ -328,6 +329,7 @@ pub(crate) fn default_configuration(sess: &Session) -> Cfg {
         ins_none!(sym::contract_checks);
     }
 
+    (sess.extensions.configure_cfg)(sess, &mut ret);
     ret
 }
 

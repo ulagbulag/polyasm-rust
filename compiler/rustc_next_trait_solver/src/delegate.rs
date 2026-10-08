@@ -120,6 +120,10 @@ pub trait SolverDelegate: Deref<Target = Self::Infcx> + Sized {
 
     /// Obtain canonicalizer state, either by allocating it afresh (the default) or by reusing
     /// previously allocated state.
+    fn external_trait_decision(&self, _trait_ref: ty::TraitRef<Self::Interner>) -> Option<Result<bool, ()>> {
+        None
+    }
+
     fn obtain_canonicalizer_state(&self) -> CanonicalizerState<Self::Interner> {
         Default::default()
     }

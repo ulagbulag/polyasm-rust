@@ -316,6 +316,8 @@ pub(crate) fn parse_check_cfg(sess: &Session, specs: Vec<String>) -> CheckCfg {
 
 /// The compiler configuration
 pub struct Config {
+    pub target_override: Option<rustc_target::spec::Target>,
+    pub early_session: Option<Box<dyn FnOnce(&mut rustc_session::EarlySession) + Send>>,
     /// Command line options
     pub opts: config::Options,
 
@@ -394,12 +396,12 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
 
     crate::callbacks::setup_callbacks();
 
-    let target = config::build_target_config(
+    let target = config.target_override.unwrap_or_else(|| config::build_target_config(
         &early_dcx,
         &config.opts.target_triple,
         config.opts.sysroot.path(),
         config.opts.unstable_opts.unstable_options,
-    );
+    ));
     let file_loader = config.file_loader.unwrap_or_else(|| Box::new(RealFileLoader));
     let path_mapping = config.opts.file_path_mapping();
     let hash_kind = config.opts.unstable_opts.src_hash_algorithm(&target);
@@ -418,8 +420,11 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
 
             let temps_dir = config.opts.unstable_opts.temps_dir.as_deref().map(PathBuf::from);
 
-            let early_sess =
+            let mut early_sess =
                 rustc_session::build_early_session(config.opts, target, config.ice_file);
+            if let Some(configure) = config.early_session {
+                configure(&mut early_sess);
+            }
 
             let mut codegen_backend = match config.make_codegen_backend {
                 None => util::get_codegen_backend(

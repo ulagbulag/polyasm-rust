@@ -217,6 +217,8 @@ pub fn compiler_entrypoint(at_args: &[String], callbacks: &mut (dyn Callbacks + 
     drop(default_early_dcx);
 
     let mut config = interface::Config {
+        target_override: None,
+        early_session: None,
         opts: sopts,
         crate_cfg: matches.opt_strs("cfg"),
         crate_check_cfg: matches.opt_strs("check-cfg"),
@@ -627,6 +629,8 @@ fn list_metadata(sess: &Session, metadata_loader: &dyn MetadataLoader) {
     }
 }
 
+pub struct PrintInfoCallback(pub fn(&Session, &config::PrintRequest, &mut String));
+
 pub fn print_crate_info(
     codegen_backend: &dyn CodegenBackend,
     sess: &Session,
@@ -866,6 +870,9 @@ pub fn print_crate_info(
             }
         }
 
+        if let Some(callback) = sess.extensions.get::<PrintInfoCallback>() {
+            callback.0(sess, req, &mut crate_info);
+        }
         req.out.overwrite(&crate_info, sess);
     }
     Compilation::Stop

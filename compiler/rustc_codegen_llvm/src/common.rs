@@ -106,7 +106,7 @@ pub(crate) fn maybe_sign_fn_ptr<'ll, 'tcx>(
 /// When inside of a landing pad, each function call in LLVM IR needs to be
 /// annotated with which landing pad it's a part of. This is accomplished via
 /// the `OperandBundleDef` value created for MSVC landing pads.
-pub(crate) struct Funclet<'ll> {
+pub struct Funclet<'ll> {
     cleanuppad: &'ll Value,
     operand: llvm::OperandBundleBox<'ll>,
 }

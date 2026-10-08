@@ -122,6 +122,11 @@ impl<'sess> AttributeParser<'sess> {
             return;
         }
 
+        if let Some(extension) = cx.cx.sess.extensions.get::<crate::ExtensionTargets>()
+            && (extension.0)(&cx.attr_path.segments, cx.target)
+        {
+            return;
+        }
         let result = allowed_targets.is_allowed(cx.target);
         if matches!(result, AllowedResult::Allowed) {
             return;

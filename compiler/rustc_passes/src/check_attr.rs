@@ -373,6 +373,7 @@ impl<'tcx> CheckAttrVisitor<'tcx> {
             AttributeKind::RustcParenSugar => (),
             AttributeKind::RustcPassByValue => (),
             AttributeKind::RustcPassIndirectlyInNonRusticAbis(..) => (),
+            AttributeKind::RustcPolyasmExtension { .. } => (),
             AttributeKind::RustcPreserveUbChecks => (),
             AttributeKind::RustcProcMacroDecls => (),
             AttributeKind::RustcPubTransparent(..) => (),

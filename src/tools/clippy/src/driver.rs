@@ -113,7 +113,14 @@ fn track_files(sess: &Session) {
 }
 
 struct DefaultCallbacks;
-impl rustc_driver::Callbacks for DefaultCallbacks {}
+impl rustc_driver::Callbacks for DefaultCallbacks {
+    /// The PolyASM toolchain links this driver with `--cfg polyasm` beside the PolyASM extension, and every
+    /// compilation then takes the configuration the PolyASM `rustc` gives it.
+    #[cfg(polyasm)]
+    fn config(&mut self, config: &mut interface::Config) {
+        rustc_driver::Callbacks::config(&mut polyasm_rust::PolyasmRust, config);
+    }
+}
 
 /// This is different from `DefaultCallbacks` that it will inform Cargo to track the value of
 /// `CLIPPY_ARGS` environment variable.
@@ -123,6 +130,7 @@ struct RustcCallbacks {
 
 impl rustc_driver::Callbacks for RustcCallbacks {
     fn config(&mut self, config: &mut interface::Config) {
+        rustc_driver::Callbacks::config(&mut DefaultCallbacks, config);
         let clippy_args_var = self.clippy_args_var.take();
         config.track_state = Some(Box::new(move |sess| {
             track_clippy_args(sess, clippy_args_var.as_deref());
@@ -138,6 +146,7 @@ struct ClippyCallbacks {
 impl rustc_driver::Callbacks for ClippyCallbacks {
     #[expect(rustc::bad_opt_access, reason = "necessary in clippy driver to set `mir_opt_level`")]
     fn config(&mut self, config: &mut interface::Config) {
+        rustc_driver::Callbacks::config(&mut DefaultCallbacks, config);
         let previous = config.register_lints.take();
         let clippy_args_var = self.clippy_args_var.take();
         config.track_state = Some(Box::new(move |sess| {

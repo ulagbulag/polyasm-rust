@@ -705,6 +705,18 @@ pub(crate) fn llfn_attrs_from_instance<'ll, 'tcx>(
         }
     }
 
+    // An extension function of PolyASM carries its namespace and its name.
+    if let Some(instance) = instance
+        && let Some((namespace, name)) = find_attr!(
+            tcx,
+            instance.def_id(),
+            RustcPolyasmExtension { namespace, name } => (*namespace, *name)
+        )
+    {
+        to_add.push(llvm::CreateAttrStringValue(cx.llcx, "polyasm-namespace", namespace.as_str()));
+        to_add.push(llvm::CreateAttrStringValue(cx.llcx, "polyasm-name", name.as_str()));
+    }
+
     if sess.pointer_authentication() {
         let cfg = sess.pointer_auth_config.as_ref().unwrap();
         for ptrauth_attr in cfg.fn_attrs() {

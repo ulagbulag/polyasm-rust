@@ -3,7 +3,7 @@
 use crate::codegen_f16_f128;
 use crate::prelude::*;
 
-pub(crate) fn clif_intcast(
+pub fn clif_intcast(
     fx: &mut FunctionCx<'_, '_, '_>,
     val: Value,
     to: Type,

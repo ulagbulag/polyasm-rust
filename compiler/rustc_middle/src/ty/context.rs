@@ -687,6 +687,9 @@ impl<'tcx> TyCtxtFeed<'tcx, LocalDefId> {
 /// reduce the number of top-level fields in [`GlobalCtxt`].
 #[derive(Default)]
 pub struct GlobalCaches<'tcx> {
+    pub extension_values: Lock<FxHashMap<std::any::TypeId, sync::IntoDynSyncSend<Box<dyn std::any::Any + Send + Sync>>>>,
+    pub extension_instances: Lock<FxHashMap<(std::any::TypeId, ty::Instance<'tcx>), sync::IntoDynSyncSend<Box<dyn std::any::Any + Send + Sync>>>>,
+
     // Internal caches for metadata decoding. No need to track deps on this.
     pub ty_rcache: Lock<FxHashMap<ty::CReaderCacheKey, Ty<'tcx>>>,
 

@@ -122,3 +122,5 @@ pub use diagnostics::ParsedDescription;
 pub use interface::{AttributeParser, EmitAttribute};
 pub use rustc_parse::parser::Recovery;
 pub use template::AttributeTemplate;
+
+pub struct ExtensionTargets(pub fn(&[rustc_span::Symbol], rustc_attr_ir::target::Target) -> bool);

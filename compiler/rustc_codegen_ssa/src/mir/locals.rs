@@ -12,7 +12,7 @@ use tracing::{debug, warn};
 use crate::mir::{FunctionCx, LocalRef};
 use crate::traits::BuilderMethods;
 
-pub(super) struct Locals<'tcx, V> {
+pub struct Locals<'tcx, V> {
     values: IndexVec<mir::Local, LocalRef<'tcx, V>>,
 }
 
@@ -59,7 +59,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         }
     }
 
-    pub(super) fn overwrite_local(
+    pub fn overwrite_local(
         &mut self,
         local: mir::Local,
         mut value: LocalRef<'tcx, Bx::Value>,

@@ -51,62 +51,69 @@ use rustc_target::spec::{Arch, CfgAbi, Env, Os};
 pub use crate::config::*;
 use crate::prelude::*;
 
-mod abi;
-mod allocator;
+pub mod abi;
+pub mod allocator;
 mod analyze;
-mod base;
-mod cast;
+pub mod base;
+pub mod cast;
 mod codegen_f16_f128;
 mod codegen_i128;
-mod common;
+pub mod common;
 mod compiler_builtins;
 mod config;
-mod constant;
-mod debuginfo;
+pub mod constant;
+pub mod debuginfo;
 mod discriminant;
-mod driver;
+pub mod driver;
 mod global_asm;
 mod inline_asm;
-mod intrinsics;
+pub mod intrinsics;
 mod linkage;
-mod main_shim;
+pub mod main_shim;
 mod num;
 mod optimize;
-mod pointer;
-mod pretty_clif;
+pub mod pointer;
+pub mod pretty_clif;
 mod toolchain;
 mod unsize;
 mod unwind_module;
-mod value_and_place;
+pub mod value_and_place;
 mod vtable;
 
-mod prelude {
-    pub(crate) use cranelift_codegen::Context;
-    pub(crate) use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
-    pub(crate) use cranelift_codegen::ir::function::Function;
-    pub(crate) use cranelift_codegen::ir::{
-        AbiParam, Block, FuncRef, Inst, InstBuilder, MemFlagsData, Signature, SourceLoc, StackSlot,
-        StackSlotData, StackSlotKind, TrapCode, Type, Value, types,
+pub mod prelude {
+    pub use cranelift_codegen::{
+        Context,
+        ir::{
+            AbiParam, Block, FuncRef, Inst, InstBuilder, MemFlagsData, Signature, SourceLoc, StackSlot,
+            StackSlotData, StackSlotKind, TrapCode, Type, Value,
+            condcodes::{FloatCC, IntCC},
+            function::Function,
+            types,
+        },
     };
-    pub(crate) use cranelift_module::{self, DataDescription, FuncId, Linkage, Module};
-    pub(crate) use rustc_abi::{BackendRepr, FIRST_VARIANT, FieldIdx, Scalar, Size, VariantIdx};
-    pub(crate) use rustc_data_structures::fx::FxHashMap;
-    pub(crate) use rustc_hir::def_id::{DefId, LOCAL_CRATE};
-    pub(crate) use rustc_index::Idx;
-    pub(crate) use rustc_middle::mir::{self, *};
-    pub(crate) use rustc_middle::ty::layout::{LayoutOf, TyAndLayout};
-    pub(crate) use rustc_middle::ty::{
-        self, FloatTy, Instance, InstanceKind, IntTy, Ty, TyCtxt, UintTy,
+    pub use cranelift_module::{self, DataDescription, FuncId, Linkage, Module};
+    pub use rustc_abi::{BackendRepr, FIRST_VARIANT, FieldIdx, Scalar, Size, VariantIdx};
+    pub use rustc_data_structures::fx::FxHashMap;
+    pub use rustc_hir::def_id::{DefId, LOCAL_CRATE};
+    pub use rustc_index::Idx;
+    pub use rustc_middle::{
+        mir::{self, *},
+        ty::{
+            self, FloatTy, Instance, InstanceKind, IntTy, Ty, TyCtxt, UintTy,
+            layout::{LayoutOf, TyAndLayout},
+        },
     };
-    pub(crate) use rustc_span::{Span, bug, span_bug};
+    pub use rustc_span::{Span, bug, span_bug};
 
-    pub(crate) use crate::abi::*;
-    pub(crate) use crate::base::{codegen_operand, codegen_place};
-    pub(crate) use crate::cast::*;
-    pub(crate) use crate::common::*;
-    pub(crate) use crate::debuginfo::{DebugContext, UnwindContext};
-    pub(crate) use crate::pointer::Pointer;
-    pub(crate) use crate::value_and_place::{CPlace, CValue};
+    pub use crate::{
+        abi::*,
+        base::{codegen_operand, codegen_place},
+        cast::*,
+        common::*,
+        debuginfo::{DebugContext, UnwindContext},
+        pointer::Pointer,
+        value_and_place::{CPlace, CValue},
+    };
 }
 
 struct PrintOnPanic<F: Fn() -> String>(F);
@@ -261,6 +268,11 @@ fn enable_verifier(sess: &Session) -> bool {
 }
 
 fn target_tuple(sess: &Session) -> target_lexicon::Triple {
+    if let Some(extension) = sess.extensions.get::<extensions::Providers>()
+        && let Some(target) = extension.target_triple.and_then(|f| f(sess))
+    {
+        return target;
+    }
     // Use versioned target tuple to make `OperatingSystem::MacOSX(...)`
     // contain a value, which we use when emitting `LC_BUILD_VERSION`.
     match back::versioned_llvm_target(sess).parse() {
@@ -269,7 +281,7 @@ fn target_tuple(sess: &Session) -> target_lexicon::Triple {
     }
 }
 
-fn build_isa(sess: &Session, jit: bool) -> Arc<dyn TargetIsa + 'static> {
+pub fn build_isa(sess: &Session, jit: bool) -> Arc<dyn TargetIsa + 'static> {
     use target_lexicon::BinaryFormat;
 
     let target_tuple = crate::target_tuple(sess);
@@ -381,3 +393,5 @@ fn build_isa(sess: &Session, jit: bool) -> Arc<dyn TargetIsa + 'static> {
 pub fn __rustc_codegen_backend() -> Box<dyn CodegenBackend> {
     Box::new(CraneliftCodegenBackend { config: None })
 }
+
+pub mod extensions;

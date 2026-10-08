@@ -10,7 +10,7 @@ use object::{Object, ObjectSection};
 use rustc_codegen_ssa::back::lto::{SerializedModule, ThinModule, ThinShared};
 use rustc_codegen_ssa::back::rmeta_link;
 use rustc_codegen_ssa::back::write::{
-    CodegenContext, FatLtoInput, SharedEmitter, TargetMachineFactoryFn, ThinLtoInput,
+    CodegenContext, EmitObj, FatLtoInput, SharedEmitter, TargetMachineFactoryFn, ThinLtoInput,
 };
 use rustc_codegen_ssa::traits::*;
 use rustc_codegen_ssa::{CompiledModule, ModuleCodegen, ModuleKind};
@@ -107,7 +107,15 @@ fn prepare_lto(
                     .ok()
                     .and_then(|c| std::str::from_utf8(c.name()).ok().map(|name| (name.trim(), c)))
             })
-            .filter(|&(name, _)| metadata_link.rust_object_files.iter().any(|f| f == name));
+            // A target whose objects are bitcode takes the bitcode objects of
+            // the native libraries an rlib bundles into the module too.
+            .filter(|(name, child)| {
+                metadata_link.rust_object_files.iter().any(|f| f == name)
+                    || cgcx.module_config.emit_obj == EmitObj::Bitcode
+                        && child
+                            .data(&*archive_data)
+                            .is_ok_and(|data| data.starts_with(b"BC\xC0\xDE"))
+            });
         for (name, child) in obj_files {
             info!("adding bitcode from {}", name);
             match get_bitcode_slice_from_object_data(

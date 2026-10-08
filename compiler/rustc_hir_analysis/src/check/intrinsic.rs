@@ -220,6 +220,10 @@ pub(crate) fn check_intrinsic_type(
     span: Span,
     intrinsic_name: Symbol,
 ) {
+    if let Some((n_tps, n_lts, n_cts, sig)) = tcx.external_intrinsic_signature(intrinsic_id) {
+        equate_intrinsic_type(tcx, span, intrinsic_id, n_tps, n_lts, n_cts, sig);
+        return;
+    }
     let generics = tcx.generics_of(intrinsic_id);
     let param = |n| {
         if let &ty::GenericParamDef { name, kind: ty::GenericParamDefKind::Type { .. }, .. } =

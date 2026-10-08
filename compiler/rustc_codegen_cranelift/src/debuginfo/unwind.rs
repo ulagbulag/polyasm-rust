@@ -18,7 +18,7 @@ use crate::prelude::*;
 pub(crate) const EXCEPTION_HANDLER_CLEANUP: u32 = 0;
 pub(crate) const EXCEPTION_HANDLER_CATCH: u32 = 1;
 
-pub(crate) struct UnwindContext {
+pub struct UnwindContext {
     endian: RunTimeEndian,
     frame_table: FrameTable,
     cie_id: Option<CieId>,

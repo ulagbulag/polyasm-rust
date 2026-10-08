@@ -4,7 +4,7 @@ pub(crate) use self::fixed_kinds::*;
 
 #[derive(Copy, Clone)]
 #[repr(transparent)]
-pub(crate) struct MetadataKindId(c_uint);
+pub struct MetadataKindId(c_uint);
 
 macro_rules! declare_fixed_metadata_kinds {
     (

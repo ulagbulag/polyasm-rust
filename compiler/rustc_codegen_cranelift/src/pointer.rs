@@ -8,7 +8,7 @@ use crate::prelude::*;
 
 /// A pointer pointing either to a certain address, a certain stack slot or nothing.
 #[derive(Copy, Clone, Debug)]
-pub(crate) struct Pointer {
+pub struct Pointer {
     base: PointerBase,
     offset: Offset32,
 }
@@ -21,15 +21,15 @@ pub(crate) enum PointerBase {
 }
 
 impl Pointer {
-    pub(crate) fn new(addr: Value) -> Self {
+    pub fn new(addr: Value) -> Self {
         Pointer { base: PointerBase::Addr(addr), offset: Offset32::new(0) }
     }
 
-    pub(crate) fn stack_slot(stack_slot: StackSlot) -> Self {
+    pub fn stack_slot(stack_slot: StackSlot) -> Self {
         Pointer { base: PointerBase::Stack(stack_slot), offset: Offset32::new(0) }
     }
 
-    pub(crate) fn dangling(align: Align) -> Self {
+    pub fn dangling(align: Align) -> Self {
         Pointer { base: PointerBase::Dangling(align), offset: Offset32::new(0) }
     }
 
@@ -37,7 +37,7 @@ impl Pointer {
         (self.base, self.offset)
     }
 
-    pub(crate) fn get_addr(self, fx: &mut FunctionCx<'_, '_, '_>) -> Value {
+    pub fn get_addr(self, fx: &mut FunctionCx<'_, '_, '_>) -> Value {
         match self.base {
             PointerBase::Addr(base_addr) => {
                 let offset: i64 = self.offset.into();
@@ -52,11 +52,11 @@ impl Pointer {
         }
     }
 
-    pub(crate) fn offset(self, fx: &mut FunctionCx<'_, '_, '_>, extra_offset: Offset32) -> Self {
+    pub fn offset(self, fx: &mut FunctionCx<'_, '_, '_>, extra_offset: Offset32) -> Self {
         self.offset_i64(fx, extra_offset.into())
     }
 
-    pub(crate) fn offset_i64(self, fx: &mut FunctionCx<'_, '_, '_>, extra_offset: i64) -> Self {
+    pub fn offset_i64(self, fx: &mut FunctionCx<'_, '_, '_>, extra_offset: i64) -> Self {
         if let Some(new_offset) = self.offset.try_add_i64(extra_offset) {
             Pointer { base: self.base, offset: new_offset }
         } else {
@@ -106,7 +106,7 @@ impl Pointer {
         }
     }
 
-    pub(crate) fn load(
+    pub fn load(
         self,
         fx: &mut FunctionCx<'_, '_, '_>,
         ty: Type,
@@ -121,7 +121,7 @@ impl Pointer {
         }
     }
 
-    pub(crate) fn store(self, fx: &mut FunctionCx<'_, '_, '_>, value: Value, flags: MemFlagsData) {
+    pub fn store(self, fx: &mut FunctionCx<'_, '_, '_>, value: Value, flags: MemFlagsData) {
         match self.base {
             PointerBase::Addr(base_addr) => {
                 fx.bcx.ins().store(flags, value, base_addr, self.offset);

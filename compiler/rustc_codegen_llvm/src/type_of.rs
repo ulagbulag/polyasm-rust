@@ -207,7 +207,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
     }
 }
 
-pub(crate) trait LayoutLlvmExt<'tcx> {
+pub trait LayoutLlvmExt<'tcx> {
     fn llvm_type<'a>(&self, cx: &CodegenCx<'a, 'tcx>) -> &'a Type;
     fn immediate_llvm_type<'a>(&self, cx: &CodegenCx<'a, 'tcx>) -> &'a Type;
     fn scalar_llvm_type_at<'a>(&self, cx: &CodegenCx<'a, 'tcx>, scalar: Scalar) -> &'a Type;

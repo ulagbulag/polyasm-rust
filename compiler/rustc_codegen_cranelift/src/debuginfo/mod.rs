@@ -25,17 +25,20 @@ use rustc_session::config::DebugInfo;
 use rustc_span::{RemapPathScopeComponents, SourceFileHash, StableSourceFileId};
 use rustc_target::callconv::FnAbi;
 
-pub(crate) use self::emit::{DebugReloc, DebugRelocName};
-pub(crate) use self::types::TypeDebugContext;
-pub(crate) use self::unwind::{EXCEPTION_HANDLER_CATCH, EXCEPTION_HANDLER_CLEANUP, UnwindContext};
 use crate::debuginfo::emit::{address_for_data, address_for_func};
 use crate::prelude::*;
+
+pub(crate) use self::{
+    emit::{DebugReloc, DebugRelocName},
+    unwind::{EXCEPTION_HANDLER_CATCH, EXCEPTION_HANDLER_CLEANUP},
+};
+pub use self::{types::TypeDebugContext, unwind::UnwindContext};
 
 pub(crate) fn producer(sess: &Session) -> String {
     format!("rustc version {} with cranelift {}", sess.cfg_version, cranelift_codegen::VERSION)
 }
 
-pub(crate) struct DebugContext {
+pub struct DebugContext {
     endian: RunTimeEndian,
 
     dwarf: DwarfUnit,

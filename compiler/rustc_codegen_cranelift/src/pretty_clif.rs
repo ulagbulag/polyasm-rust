@@ -259,7 +259,7 @@ pub(crate) fn format_clif_ir_header(isa: &dyn TargetIsa, symbol_name: &str) -> S
     header
 }
 
-pub(crate) fn should_write_ir(sess: &Session) -> bool {
+pub fn should_write_ir(sess: &Session) -> bool {
     sess.opts.output_types.contains_key(&OutputType::LlvmAssembly)
 }
 

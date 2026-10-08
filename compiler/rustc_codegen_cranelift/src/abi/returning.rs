@@ -42,7 +42,7 @@ pub(super) fn codegen_return_param<'tcx>(
 
 /// Invokes the closure with if necessary a value representing the return pointer. When the closure
 /// returns the call return value(s) if any are written to the correct place.
-pub(super) fn codegen_with_call_return_arg<'tcx>(
+pub fn codegen_with_call_return_arg<'tcx>(
     fx: &mut FunctionCx<'_, '_, 'tcx>,
     ret_arg_abi: &ArgAbi<'tcx, Ty<'tcx>>,
     ret_place: CPlace<'tcx>,

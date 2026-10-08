@@ -55,16 +55,16 @@ impl<'ll, CX: Borrow<SCx<'ll>>> GenericCx<'ll, CX> {
             llvm::LLVMStructSetBody(ty, els.as_ptr(), els.len() as c_uint, packed.to_llvm_bool())
         }
     }
-    pub(crate) fn type_void(&self) -> &'ll Type {
+    pub fn type_void(&self) -> &'ll Type {
         unsafe { llvm::LLVMVoidTypeInContext(self.llcx()) }
     }
 
     ///x Creates an integer type with the given number of bits, e.g., i24
-    pub(crate) fn type_ix(&self, num_bits: u64) -> &'ll Type {
+    pub fn type_ix(&self, num_bits: u64) -> &'ll Type {
         llvm::LLVMIntTypeInContext(self.llcx(), num_bits as c_uint)
     }
 
-    pub(crate) fn type_vector(&self, ty: &'ll Type, count: u64) -> &'ll Type {
+    pub fn type_vector(&self, ty: &'ll Type, count: u64) -> &'ll Type {
         unsafe { llvm::LLVMVectorType(ty, count as c_uint) }
     }
 
@@ -106,7 +106,7 @@ impl<'ll, CX: Borrow<SCx<'ll>>> GenericCx<'ll, CX> {
     }
 }
 impl<'ll, 'tcx> CodegenCx<'ll, 'tcx> {
-    pub(crate) fn type_int_from_ty(&self, t: ty::IntTy) -> &'ll Type {
+    pub fn type_int_from_ty(&self, t: ty::IntTy) -> &'ll Type {
         match t {
             ty::IntTy::Isize => self.type_isize(),
             ty::IntTy::I8 => self.type_i8(),
@@ -117,7 +117,7 @@ impl<'ll, 'tcx> CodegenCx<'ll, 'tcx> {
         }
     }
 
-    pub(crate) fn type_uint_from_ty(&self, t: ty::UintTy) -> &'ll Type {
+    pub fn type_uint_from_ty(&self, t: ty::UintTy) -> &'ll Type {
         match t {
             ty::UintTy::Usize => self.type_isize(),
             ty::UintTy::U8 => self.type_i8(),
@@ -128,7 +128,7 @@ impl<'ll, 'tcx> CodegenCx<'ll, 'tcx> {
         }
     }
 
-    pub(crate) fn type_float_from_ty(&self, t: ty::FloatTy) -> &'ll Type {
+    pub fn type_float_from_ty(&self, t: ty::FloatTy) -> &'ll Type {
         match t {
             ty::FloatTy::F16 => self.type_f16(),
             ty::FloatTy::F32 => self.type_f32(),
@@ -165,7 +165,7 @@ impl<'ll, CX: Borrow<SCx<'ll>>> GenericCx<'ll, CX> {
         unsafe { llvm::LLVMFunctionType(ret, args.as_ptr(), args.len() as c_uint, TRUE) }
     }
 
-    pub(crate) fn type_i1(&self) -> &'ll Type {
+    pub fn type_i1(&self) -> &'ll Type {
         unsafe { llvm::LLVMInt1TypeInContext(self.llcx()) }
     }
 

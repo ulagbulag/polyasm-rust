@@ -3495,6 +3495,7 @@ pub enum GeneratedAttr {
     DocHidden,
     CoverageOff,
     RustcTestMarker(Symbol),
+    RustcPolyasmExtension(Symbol, Symbol),
 }
 
 impl GeneratedAttr {
@@ -3510,6 +3511,9 @@ impl GeneratedAttr {
             GeneratedAttr::RustcTestMarker(test_path) => {
                 format!("#[rustc_test_marker = \"{test_path}\"]")
             }
+            GeneratedAttr::RustcPolyasmExtension(namespace, name) => {
+                format!("#[rustc_polyasm_extension({namespace}, {name})]")
+            }
         }
     }
     pub fn value_span(&self) -> Option<Span> {
@@ -3520,6 +3524,7 @@ impl GeneratedAttr {
             GeneratedAttr::DocHidden => None,
             GeneratedAttr::CoverageOff => None,
             GeneratedAttr::RustcTestMarker(_) => None,
+            GeneratedAttr::RustcPolyasmExtension(..) => None,
         }
     }
 
@@ -3531,6 +3536,7 @@ impl GeneratedAttr {
             GeneratedAttr::DocHidden => None,
             GeneratedAttr::CoverageOff => None,
             GeneratedAttr::RustcTestMarker(_) => None,
+            GeneratedAttr::RustcPolyasmExtension(..) => None,
         }
     }
 
@@ -3542,6 +3548,10 @@ impl GeneratedAttr {
             GeneratedAttr::DocHidden => Some(sym::doc),
             GeneratedAttr::CoverageOff => Some(sym::coverage),
             GeneratedAttr::RustcTestMarker(_) => Some(sym::rustc_test_marker),
+            #[allow(rustc::symbol_intern_string_literal)]
+            GeneratedAttr::RustcPolyasmExtension(..) => {
+                Some(Symbol::intern("rustc_polyasm_extension"))
+            }
         }
     }
 
@@ -3553,6 +3563,10 @@ impl GeneratedAttr {
             GeneratedAttr::DocHidden => &[sym::doc],
             GeneratedAttr::CoverageOff => &[sym::coverage],
             GeneratedAttr::RustcTestMarker(_) => &[sym::rustc_test_marker],
+            #[allow(rustc::symbol_intern_string_literal)]
+            GeneratedAttr::RustcPolyasmExtension(..) => {
+                &[Symbol::intern("rustc_polyasm_extension")]
+            }
         };
 
         path == name
@@ -3570,6 +3584,7 @@ impl GeneratedAttr {
             GeneratedAttr::DocHidden => None,
             GeneratedAttr::CoverageOff => None,
             GeneratedAttr::RustcTestMarker(_) => None,
+            GeneratedAttr::RustcPolyasmExtension(..) => None,
         }
     }
 
@@ -3581,6 +3596,7 @@ impl GeneratedAttr {
             GeneratedAttr::DocHidden => false,
             GeneratedAttr::CoverageOff => false,
             GeneratedAttr::RustcTestMarker(_) => false,
+            GeneratedAttr::RustcPolyasmExtension(..) => false,
         }
     }
     pub fn value_str(&self) -> Option<Symbol> {
@@ -3591,6 +3607,7 @@ impl GeneratedAttr {
             GeneratedAttr::DocHidden => None,
             GeneratedAttr::CoverageOff => None,
             GeneratedAttr::RustcTestMarker(test_path) => Some(*test_path),
+            GeneratedAttr::RustcPolyasmExtension(..) => None,
         }
     }
 
@@ -3602,6 +3619,7 @@ impl GeneratedAttr {
             GeneratedAttr::DocHidden => None,
             GeneratedAttr::CoverageOff => None,
             GeneratedAttr::RustcTestMarker(_) => None,
+            GeneratedAttr::RustcPolyasmExtension(..) => None,
         }
     }
 

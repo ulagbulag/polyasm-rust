@@ -25,6 +25,8 @@ pub(crate) fn analyze(fx: &FunctionCx<'_, '_, '_>) -> IndexVec<Local, SsaKind> {
         for stmt in bb.statements.iter() {
             if let Assign(place_and_rval) = &stmt.kind
                 && let Rvalue::Ref(_, _, place) | Rvalue::RawPtr(_, place) = &place_and_rval.1
+                && fx.tcx.sess.extensions.get::<crate::extensions::Providers>()
+                    .and_then(|e| e.requires_address).is_none_or(|f| f(&place_and_rval.1))
             {
                 flag_map[place.local] = SsaKind::NotSsa;
             }

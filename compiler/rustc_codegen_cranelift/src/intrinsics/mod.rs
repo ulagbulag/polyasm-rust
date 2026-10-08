@@ -63,7 +63,7 @@ pub(crate) fn clif_vector_type<'tcx>(tcx: TyCtxt<'tcx>, layout: TyAndLayout<'tcx
     scalar_to_clif_type(tcx, element).by(count.as_u32()).unwrap()
 }
 
-fn simd_for_each_lane<'tcx>(
+pub fn simd_for_each_lane<'tcx>(
     fx: &mut FunctionCx<'_, '_, 'tcx>,
     val: CValue<'tcx>,
     ret: CPlace<'tcx>,
@@ -284,6 +284,11 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
         return Err(Instance::new_raw(instance.def_id(), instance.args));
     }
 
+    if let Some(f) = fx.tcx.sess.extensions.get::<crate::extensions::Providers>().and_then(|e| e.intrinsic)
+        && let Some(result) = f(fx, instance, args, destination, target, source_info)
+    {
+        return result;
+    }
     let intrinsic = fx.tcx.item_name(instance.def_id());
     let instance_args = instance.args;
 

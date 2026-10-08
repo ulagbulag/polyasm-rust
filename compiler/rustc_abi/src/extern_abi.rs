@@ -124,6 +124,12 @@ pub enum ExternAbi {
     Win64 {
         unwind: bool,
     },
+
+    /* polyasm */
+    /// The ABI of an extension function of PolyASM, the Rust ABI over a weak
+    /// symbol whose body stands as the fallback beside the engine a machine
+    /// spells for the function.
+    Polyasm,
 }
 
 macro_rules! abi_impls {
@@ -218,6 +224,7 @@ abi_impls! {
             Win64 { unwind: false } =><= "win64",
             Win64 { unwind: true } =><= "win64-unwind",
             X86Interrupt =><= "x86-interrupt",
+            Polyasm =><= "polyasm",
     }
 }
 
@@ -285,7 +292,7 @@ impl ExternAbi {
     /// - are subject to change between compiler versions
     pub fn is_rustic_abi(self) -> bool {
         use ExternAbi::*;
-        matches!(self, Rust | RustCall | RustCold | RustPreserveNone | RustTail)
+        matches!(self, Rust | RustCall | RustCold | RustPreserveNone | RustTail | Polyasm)
     }
 
     /// Returns whether the ABI supports C variadics. This only controls whether we allow *imports*
@@ -366,6 +373,7 @@ impl ExternAbi {
             | Self::Win64 { .. }
             | Self::RustPreserveNone
             | Self::RustTail
+            | Self::Polyasm
             | Self::Swift => true,
         }
     }

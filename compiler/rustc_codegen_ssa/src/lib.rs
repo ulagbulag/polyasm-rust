@@ -416,3 +416,5 @@ impl CodegenLintLevelSpecs {
         }
     }
 }
+
+pub mod extensions;

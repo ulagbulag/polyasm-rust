@@ -15,7 +15,7 @@ use crate::constant::ConstantCx;
 use crate::debuginfo::FunctionDebugContext;
 use crate::prelude::*;
 
-pub(crate) fn pointer_ty(tcx: TyCtxt<'_>) -> types::Type {
+pub fn pointer_ty(tcx: TyCtxt<'_>) -> types::Type {
     match tcx.data_layout.pointer_size().bits() {
         16 => types::I16,
         32 => types::I32,
@@ -24,7 +24,7 @@ pub(crate) fn pointer_ty(tcx: TyCtxt<'_>) -> types::Type {
     }
 }
 
-pub(crate) fn scalar_to_clif_type(tcx: TyCtxt<'_>, scalar: Scalar) -> Type {
+pub fn scalar_to_clif_type(tcx: TyCtxt<'_>, scalar: Scalar) -> Type {
     match scalar.primitive() {
         Primitive::Int(int, _sign) => match int {
             Integer::I8 => types::I8,
@@ -46,7 +46,7 @@ pub(crate) fn scalar_to_clif_type(tcx: TyCtxt<'_>, scalar: Scalar) -> Type {
     }
 }
 
-fn clif_type_from_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<types::Type> {
+pub fn clif_type_from_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<types::Type> {
     Some(match ty.kind() {
         ty::Bool => types::I8,
         ty::Uint(size) => match size {
@@ -104,7 +104,7 @@ fn clif_pair_type_from_ty<'tcx>(
     })
 }
 
-pub(crate) fn codegen_icmp_imm(
+pub fn codegen_icmp_imm(
     fx: &mut FunctionCx<'_, '_, '_>,
     intcc: IntCC,
     lhs: Value,
@@ -148,7 +148,7 @@ pub(crate) fn codegen_icmp_imm(
     }
 }
 
-pub(crate) fn codegen_bitcast(fx: &mut FunctionCx<'_, '_, '_>, dst_ty: Type, val: Value) -> Value {
+pub fn codegen_bitcast(fx: &mut FunctionCx<'_, '_, '_>, dst_ty: Type, val: Value) -> Value {
     let mut flags = MemFlagsData::new();
     flags.set_endianness(match fx.tcx.data_layout.endian {
         rustc_abi::Endian::Big => cranelift_codegen::ir::Endianness::Big,
@@ -157,7 +157,7 @@ pub(crate) fn codegen_bitcast(fx: &mut FunctionCx<'_, '_, '_>, dst_ty: Type, val
     fx.bcx.ins().bitcast(dst_ty, flags, val)
 }
 
-pub(crate) fn type_zero_value(bcx: &mut FunctionBuilder<'_>, ty: Type) -> Value {
+pub fn type_zero_value(bcx: &mut FunctionBuilder<'_>, ty: Type) -> Value {
     if ty == types::I128 {
         let zero = bcx.ins().iconst(types::I64, 0);
         bcx.ins().iconcat(zero, zero)
@@ -166,7 +166,7 @@ pub(crate) fn type_zero_value(bcx: &mut FunctionBuilder<'_>, ty: Type) -> Value 
     }
 }
 
-pub(crate) fn type_min_max_value(
+pub fn type_min_max_value(
     bcx: &mut FunctionBuilder<'_>,
     ty: Type,
     signed: bool,
@@ -225,7 +225,7 @@ pub(crate) fn type_min_max_value(
     (min, max)
 }
 
-pub(crate) fn type_sign(ty: Ty<'_>) -> bool {
+pub fn type_sign(ty: Ty<'_>) -> bool {
     match ty.kind() {
         ty::Ref(..) | ty::RawPtr(..) | ty::FnPtr(..) | ty::Char | ty::Uint(..) | ty::Bool => false,
         ty::Int(..) => true,
@@ -234,7 +234,7 @@ pub(crate) fn type_sign(ty: Ty<'_>) -> bool {
     }
 }
 
-pub(crate) fn create_wrapper_function(
+pub fn create_wrapper_function(
     module: &mut dyn Module,
     sig: Signature,
     wrapper_name: &str,
@@ -270,22 +270,22 @@ pub(crate) fn create_wrapper_function(
     module.define_function(wrapper_func_id, &mut ctx).unwrap();
 }
 
-pub(crate) struct FunctionCx<'m, 'clif, 'tcx: 'm> {
-    pub(crate) module: &'m mut dyn Module,
+pub struct FunctionCx<'m, 'clif, 'tcx: 'm> {
+    pub module: &'m mut dyn Module,
     pub(crate) debug_context: Option<&'clif mut DebugContext>,
-    pub(crate) tcx: TyCtxt<'tcx>,
-    pub(crate) target_config: TargetFrontendConfig, // Cached from module
-    pub(crate) pointer_type: Type,                  // Cached from module
+    pub tcx: TyCtxt<'tcx>,
+    pub target_config: TargetFrontendConfig, // Cached from module
+    pub pointer_type: Type,                  // Cached from module
     pub(crate) constants_cx: ConstantCx,
     pub(crate) func_debug_cx: Option<FunctionDebugContext>,
 
     pub(crate) cgu_name: Symbol,
     pub(crate) instance: Instance<'tcx>,
     pub(crate) symbol_name: String,
-    pub(crate) mir: &'tcx Body<'tcx>,
+    pub mir: &'tcx Body<'tcx>,
     pub(crate) fn_abi: &'tcx FnAbi<'tcx, Ty<'tcx>>,
 
-    pub(crate) bcx: FunctionBuilder<'clif>,
+    pub bcx: FunctionBuilder<'clif>,
     pub(crate) block_map: IndexVec<BasicBlock, Block>,
     pub(crate) local_map: IndexVec<Local, CPlace<'tcx>>,
 
@@ -345,7 +345,7 @@ impl<'tcx> HasTargetSpec for FunctionCx<'_, '_, 'tcx> {
 }
 
 impl<'tcx> FunctionCx<'_, '_, 'tcx> {
-    pub(crate) fn monomorphize<T>(&self, value: T) -> T
+    pub fn monomorphize<T>(&self, value: T) -> T
     where
         T: TypeFoldable<TyCtxt<'tcx>> + Copy,
     {
@@ -356,7 +356,7 @@ impl<'tcx> FunctionCx<'_, '_, 'tcx> {
         )
     }
 
-    pub(crate) fn clif_type(&self, ty: Ty<'tcx>) -> Option<Type> {
+    pub fn clif_type(&self, ty: Ty<'tcx>) -> Option<Type> {
         clif_type_from_ty(self.tcx, ty)
     }
 
@@ -364,7 +364,7 @@ impl<'tcx> FunctionCx<'_, '_, 'tcx> {
         clif_pair_type_from_ty(self.tcx, ty)
     }
 
-    pub(crate) fn get_block(&self, bb: BasicBlock) -> Block {
+    pub fn get_block(&self, bb: BasicBlock) -> Block {
         *self.block_map.get(bb).unwrap()
     }
 
@@ -410,7 +410,7 @@ impl<'tcx> FunctionCx<'_, '_, 'tcx> {
         }
     }
 
-    pub(crate) fn set_debug_loc(&mut self, source_info: mir::SourceInfo) {
+    pub fn set_debug_loc(&mut self, source_info: mir::SourceInfo) {
         if let Some(debug_context) = &mut self.debug_context {
             let (file_id, line, column) =
                 debug_context.get_span_loc(self.tcx, self.mir.span, source_info.span);
@@ -421,7 +421,7 @@ impl<'tcx> FunctionCx<'_, '_, 'tcx> {
         }
     }
 
-    pub(crate) fn get_caller_location(&mut self, source_info: mir::SourceInfo) -> CValue<'tcx> {
+    pub fn get_caller_location(&mut self, source_info: mir::SourceInfo) -> CValue<'tcx> {
         self.mir.caller_location_span(source_info, self.caller_location, self.tcx, |span| {
             let const_loc = self.tcx.span_as_caller_location(span);
             crate::constant::codegen_const_value(self, const_loc, self.tcx.caller_location_ty())
@@ -429,7 +429,7 @@ impl<'tcx> FunctionCx<'_, '_, 'tcx> {
     }
 }
 
-pub(crate) struct FullyMonomorphizedLayoutCx<'tcx>(pub(crate) TyCtxt<'tcx>);
+pub struct FullyMonomorphizedLayoutCx<'tcx>(pub TyCtxt<'tcx>);
 
 impl<'tcx> LayoutOfHelpers<'tcx> for FullyMonomorphizedLayoutCx<'tcx> {
     #[inline]

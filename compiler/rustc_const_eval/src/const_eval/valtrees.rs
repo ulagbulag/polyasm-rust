@@ -421,6 +421,14 @@ fn valtree_into_mplace<'tcx>(
             debug!("writing trivial valtree {:?} to place {:?}", scalar_int, place);
             ecx.write_immediate(Immediate::Scalar(scalar_int.into()), place).unwrap();
         }
+        ty::Pat(base, ..) => {
+            let mut place = place.clone();
+            // The valtree of the base type is the same as the valtree of the pattern type.
+            // Since the valtree does not contain the type or layout, we can just
+            // switch to the base type.
+            place.layout = ecx.layout_of(*base).unwrap();
+            valtree_into_mplace(ecx, &place, valtree)
+        }
         ty::Ref(_, inner_ty, _) => {
             let imm = valtree_to_ref(ecx, valtree, *inner_ty);
             debug!(?imm);

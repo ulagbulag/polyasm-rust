@@ -96,7 +96,7 @@ impl AbiMap {
         let canon_abi = match (extern_abi, arch) {
             // infallible lowerings
             (ExternAbi::C { .. }, _) => CanonAbi::C,
-            (ExternAbi::Rust | ExternAbi::RustCall, _) => CanonAbi::Rust,
+            (ExternAbi::Rust | ExternAbi::RustCall | ExternAbi::Polyasm, _) => CanonAbi::Rust,
 
             // Dummy mapping to prevent reporting an error in the frontend
             (ExternAbi::LlvmIntrinsic, _) => CanonAbi::C,

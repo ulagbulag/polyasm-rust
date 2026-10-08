@@ -42,6 +42,9 @@ impl GeneratedAttrState {
             GeneratedAttr::RustcTestMarker(test_marker) => {
                 AttributeKind::RustcTestMarker(test_marker)
             }
+            GeneratedAttr::RustcPolyasmExtension(namespace, name) => {
+                AttributeKind::RustcPolyasmExtension { namespace, name }
+            }
         };
         self.state.push(attr);
     }

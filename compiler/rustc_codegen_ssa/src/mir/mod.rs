@@ -15,12 +15,12 @@ use crate::base;
 use crate::traits::*;
 
 mod analyze;
-mod block;
+pub mod block;
 mod constant;
 mod coverageinfo;
 pub mod debuginfo;
 mod intrinsic;
-mod locals;
+pub mod locals;
 pub mod naked_asm;
 pub mod operand;
 pub mod place;
@@ -52,13 +52,13 @@ type PerLocalVarDebugInfoIndexVec<'tcx, V> =
 pub struct FunctionCx<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> {
     instance: Instance<'tcx>,
 
-    mir: &'tcx mir::Body<'tcx>,
+    pub mir: &'tcx mir::Body<'tcx>,
 
     debug_context: Option<FunctionDebugContext<'tcx, Bx::DIScope, Bx::DILocation>>,
 
     llfn: Bx::Function,
 
-    cx: &'a Bx::CodegenCx,
+    pub cx: &'a Bx::CodegenCx,
 
     fn_abi: &'tcx FnAbi<'tcx, Ty<'tcx>>,
 
@@ -118,7 +118,7 @@ pub struct FunctionCx<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> {
     ///
     /// Avoiding allocs can also be important for certain intrinsics,
     /// notably `expect`.
-    locals: locals::Locals<'tcx, Bx::Value>,
+    pub locals: locals::Locals<'tcx, Bx::Value>,
 
     /// All `VarDebugInfo` from the MIR body, partitioned by `Local`.
     /// This is `None` if no variable debuginfo/names are needed.
@@ -142,7 +142,7 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
     }
 }
 
-enum LocalRef<'tcx, V> {
+pub enum LocalRef<'tcx, V> {
     Place(PlaceRef<'tcx, V>),
     /// `UnsizedPlace(p)`: `p` itself is a thin pointer (indirect place).
     /// `*p` is the wide pointer that references the actual unsized place.

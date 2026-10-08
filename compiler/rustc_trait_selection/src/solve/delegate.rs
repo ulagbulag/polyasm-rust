@@ -499,6 +499,10 @@ impl<'tcx> rustc_next_trait_solver::delegate::SolverDelegate for SolverDelegate<
             .ok_or(NoSolution)
     }
 
+    fn external_trait_decision(&self, trait_ref: ty::TraitRef<'tcx>) -> Option<Result<bool, ()>> {
+        self.tcx.external_trait_decision(trait_ref)
+    }
+
     fn obtain_canonicalizer_state(&self) -> CanonicalizerState<Self::Interner> {
         // We temporarily take the canonicalizer state.
         mem::take(&mut self.canonicalizer_state.borrow_mut())

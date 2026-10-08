@@ -41,14 +41,14 @@ use crate::llvm::{
 use crate::type_of::LayoutLlvmExt;
 
 #[must_use]
-pub(crate) struct GenericBuilder<'a, 'll, CX: Borrow<SCx<'ll>>> {
-    pub llbuilder: &'ll mut llvm::Builder<'ll>,
+pub struct GenericBuilder<'a, 'll, CX: Borrow<SCx<'ll>>> {
+    pub(crate) llbuilder: &'ll mut llvm::Builder<'ll>,
     pub cx: &'a GenericCx<'ll, CX>,
     pub span: rustc_span::Span,
 }
 
 pub(crate) type SBuilder<'a, 'll> = GenericBuilder<'a, 'll, SCx<'ll>>;
-pub(crate) type Builder<'a, 'll, 'tcx> = GenericBuilder<'a, 'll, FullCx<'ll, 'tcx>>;
+pub type Builder<'a, 'll, 'tcx> = GenericBuilder<'a, 'll, FullCx<'ll, 'tcx>>;
 
 impl<'a, 'll, CX: Borrow<SCx<'ll>>> Drop for GenericBuilder<'a, 'll, CX> {
     fn drop(&mut self) {
@@ -287,6 +287,29 @@ macro_rules! set_math_builder_methods {
 }
 
 impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
+    fn codegen_extension_call(
+        fx: &mut rustc_codegen_ssa::mir::FunctionCx<'a, 'tcx, Self>,
+        helper: &rustc_codegen_ssa::mir::block::TerminatorCodegenHelper<'tcx>,
+        bx: &mut Self, func: &rustc_middle::mir::Operand<'tcx>,
+        args: &[rustc_span::Spanned<rustc_middle::mir::Operand<'tcx>>],
+        destination: rustc_middle::mir::Place<'tcx>, target: Option<rustc_middle::mir::BasicBlock>,
+        unwind: rustc_middle::mir::UnwindAction, source: rustc_middle::mir::SourceInfo,
+        kind: &rustc_codegen_ssa::mir::block::CallKind, mergeable: bool,
+    ) -> Option<rustc_codegen_ssa::mir::block::MergingSucc> {
+        let extension = bx.tcx.sess.extensions.get::<crate::extensions::Providers>()?;
+        (extension.call)(fx, helper, bx, func, args, destination, target, unwind, source, kind, mergeable)
+    }
+
+    fn apply_extension_call_attrs(
+        &mut self, fx: &rustc_codegen_ssa::mir::FunctionCx<'a, 'tcx, Self>,
+        helper: &rustc_codegen_ssa::mir::block::TerminatorCodegenHelper<'tcx>,
+        instance: Option<Instance<'tcx>>, call: &'ll Value, function: &'ll Value,
+    ) {
+        if let Some(extension) = self.tcx.sess.extensions.get::<crate::extensions::Providers>() {
+            (extension.call_attrs)(self, fx, helper, instance, call, function);
+        }
+    }
+
     type CodegenCx = CodegenCx<'ll, 'tcx>;
 
     fn build(cx: &'a CodegenCx<'ll, 'tcx>, llbb: &'ll BasicBlock) -> Self {
@@ -506,6 +529,9 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         };
         if let Some(fn_abi) = fn_abi {
             fn_abi.apply_attrs_callsite(self, invoke);
+        }
+        if let Some(extension) = self.tcx.sess.extensions.get::<crate::extensions::Providers>() {
+            (extension.callsite_attrs)(self, instance, invoke);
         }
         invoke
     }
@@ -1521,6 +1547,9 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         if let Some(fn_abi) = fn_abi {
             fn_abi.apply_attrs_callsite(self, call);
         }
+        if let Some(extension) = self.tcx.sess.extensions.get::<crate::extensions::Providers>() {
+            (extension.callsite_attrs)(self, callee_instance, call);
+        }
         call
     }
 
@@ -1737,7 +1766,7 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
         call
     }
 
-    pub(crate) fn insert_element(
+    pub fn insert_element(
         &mut self,
         vec: &'ll Value,
         elt: &'ll Value,
@@ -1746,7 +1775,7 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
         unsafe { llvm::LLVMBuildInsertElement(self.llbuilder, vec, elt, idx, UNNAMED) }
     }
 
-    pub(crate) fn shuffle_vector(
+    pub fn shuffle_vector(
         &mut self,
         v1: &'ll Value,
         v2: &'ll Value,
@@ -1878,7 +1907,7 @@ impl<'a, 'll, CX: Borrow<SCx<'ll>>> GenericBuilder<'a, 'll, CX> {
 }
 
 impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
-    pub(crate) fn call_intrinsic(
+    pub fn call_intrinsic(
         &mut self,
         base_name: impl Into<Cow<'static, str>>,
         type_params: &[&'ll Type],
@@ -1994,6 +2023,9 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
         };
         if let Some(fn_abi) = fn_abi {
             fn_abi.apply_attrs_callsite(self, callbr);
+        }
+        if let Some(extension) = self.tcx.sess.extensions.get::<crate::extensions::Providers>() {
+            (extension.callsite_attrs)(self, instance, callbr);
         }
         callbr
     }

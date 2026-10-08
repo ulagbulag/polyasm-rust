@@ -170,7 +170,7 @@ impl ModuleConfig {
             EmitObj::ObjectCode(BitcodeSection::None)
         };
 
-        ModuleConfig {
+        let mut config = ModuleConfig {
             passes: if_regular!(sess.opts.cg.passes.clone(), vec![]),
 
             opt_level: opt_level_and_size,
@@ -263,7 +263,11 @@ impl ModuleConfig {
                 None
             ),
             offload: if_regular!(sess.opts.unstable_opts.offload.clone(), vec![]),
+        };
+        if let Some(extension) = sess.extensions.get::<crate::extensions::Providers>() {
+            (extension.module_config)(kind, tcx, &mut config);
         }
+        config
     }
 
     pub fn bitcode_needed(&self) -> bool {
@@ -404,6 +408,11 @@ fn need_bitcode_in_object(tcx: TyCtxt<'_>) -> bool {
     sess.opts.cg.embed_bitcode
         && tcx.crate_types().contains(&CrateType::Rlib)
         && sess.opts.output_types.contains_key(&OutputType::Exe)
+}
+
+pub(crate) fn coordinator_lto(tcx: TyCtxt<'_>) -> Lto {
+    tcx.sess.extensions.get::<crate::extensions::Providers>()
+        .map_or_else(|| tcx.sess.lto(), |extension| (extension.lto)(tcx))
 }
 
 fn need_pre_lto_bitcode_for_incr_comp(sess: &Session) -> bool {
@@ -1223,7 +1232,7 @@ fn start_executing_work<B: WriteBackendMethods>(
 
     // Compute the set of symbols we need to retain when doing thin local LTO (if we need to)
     let exported_symbols_for_lto =
-        if sess.lto() == Lto::ThinLocal { lto::exported_symbols_for_lto(tcx, &[]) } else { vec![] };
+        if coordinator_lto(tcx) == Lto::ThinLocal { lto::exported_symbols_for_lto(tcx, &[]) } else { vec![] };
 
     // First up, convert our jobserver into a helper thread so we can use normal
     // mpsc channels to manage our messages and such.
@@ -1263,7 +1272,7 @@ fn start_executing_work<B: WriteBackendMethods>(
 
     let cgcx = CodegenContext {
         crate_types: tcx.crate_types().to_vec(),
-        lto: sess.lto(),
+        lto: coordinator_lto(tcx),
         use_linker_plugin_lto: sess.opts.cg.linker_plugin_lto.enabled(),
         dylib_lto: sess.opts.unstable_opts.dylib_lto,
         prefer_dynamic: sess.opts.cg.prefer_dynamic,

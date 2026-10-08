@@ -2,7 +2,7 @@
 
 mod comments;
 mod pass_mode;
-mod returning;
+pub mod returning;
 
 use std::borrow::Cow;
 use std::mem;
@@ -25,6 +25,7 @@ use rustc_target::callconv::{FnAbi, PassMode};
 use rustc_target::spec::Arch;
 use smallvec::{SmallVec, smallvec};
 
+pub use self::pass_mode::adjust_arg_for_abi;
 use self::pass_mode::*;
 pub(crate) use self::returning::codegen_return;
 use crate::base::codegen_unwind_terminate;
@@ -130,7 +131,7 @@ pub(crate) fn import_function<'tcx>(
 
 impl<'tcx> FunctionCx<'_, '_, 'tcx> {
     /// Instance must be monomorphized
-    pub(crate) fn get_function_ref(&mut self, inst: Instance<'tcx>) -> FuncRef {
+    pub fn get_function_ref(&mut self, inst: Instance<'tcx>) -> FuncRef {
         let func_id = import_function(self.tcx, self.module, inst);
         let func_ref = self.module.declare_func_in_func(func_id, self.bcx.func);
 
@@ -141,7 +142,7 @@ impl<'tcx> FunctionCx<'_, '_, 'tcx> {
         func_ref
     }
 
-    pub(crate) fn lib_call(
+    pub fn lib_call(
         &mut self,
         name: &str,
         params: Vec<AbiParam>,
@@ -189,6 +190,8 @@ impl<'tcx> FunctionCx<'_, '_, 'tcx> {
             Cow::Owned(vec![codegen_bitcast(self, types::I128, ret)])
         } else if (ret_single_i128 && self.tcx.sess.target.arch == Arch::S390x)
             || (ret_single_f128 && indirect_f128)
+            || (returns.len() == 1 && self.tcx.sess.extensions.get::<crate::extensions::Providers>()
+                .and_then(|e| e.indirect_libcall_return).is_some_and(|f| f(self.tcx.sess, returns[0].value_type)))
         {
             // Return x86_64 Windows f128 and s390x i128 indirectly (sret in LLVM terminology).
             let ret_ty = returns[0].value_type;
@@ -215,8 +218,12 @@ impl<'tcx> FunctionCx<'_, '_, 'tcx> {
         args: &[Value],
     ) -> &[Value] {
         let sig = Signature { params, returns, call_conv: self.target_config.default_call_conv };
-        let func_id = declare_import_function(self.tcx, self.module, name, &sig);
-        let func_ref = self.module.declare_func_in_func(func_id, self.bcx.func);
+        let custom = self.tcx.sess.extensions.get::<crate::extensions::Providers>()
+            .and_then(|e| e.libcall).and_then(|f| f(self, name, &sig));
+        let func_ref = custom.unwrap_or_else(|| {
+            let func_id = declare_import_function(self.tcx, self.module, name, &sig);
+            self.module.declare_func_in_func(func_id, self.bcx.func)
+        });
         let call_inst = self.bcx.ins().call(func_ref, args);
         if self.clif_comments.enabled() {
             self.add_comment(func_ref, format!("{:?}", name));
@@ -407,13 +414,13 @@ pub(crate) fn codegen_fn_prelude<'tcx>(fx: &mut FunctionCx<'_, '_, 'tcx>, start_
     fx.bcx.ins().jump(*fx.block_map.get(START_BLOCK).unwrap(), &[]);
 }
 
-struct CallArgument<'tcx> {
-    value: CValue<'tcx>,
-    is_owned: bool,
+pub struct CallArgument<'tcx> {
+    pub value: CValue<'tcx>,
+    pub is_owned: bool,
 }
 
 // FIXME avoid intermediate `CValue` before calling `adjust_arg_for_abi`
-fn codegen_call_argument_operand<'tcx>(
+pub fn codegen_call_argument_operand<'tcx>(
     fx: &mut FunctionCx<'_, '_, 'tcx>,
     operand: &Operand<'tcx>,
 ) -> CallArgument<'tcx> {
@@ -432,6 +439,11 @@ pub(crate) fn codegen_terminator_call<'tcx>(
     target: Option<BasicBlock>,
     unwind: UnwindAction,
 ) {
+    if let Some(f) = fx.tcx.sess.extensions.get::<crate::extensions::Providers>().and_then(|e| e.call)
+        && f(fx, source_info, func, args, destination, target, unwind)
+    {
+        return;
+    }
     let func = codegen_operand(fx, func);
     let fn_sig = func.layout().ty.fn_sig(fx.tcx);
 
@@ -750,6 +762,10 @@ pub(crate) fn codegen_drop<'tcx>(
     if let ty::InstanceKind::Shim(ty::ShimKind::DropGlue(_, None)) = drop_instance.def {
         // we don't actually need to drop anything
         fx.bcx.ins().jump(ret_block, &[]);
+    } else if fx.tcx.sess.extensions.get::<crate::extensions::Providers>()
+        .and_then(|e| e.skip_drop).is_some_and(|f| f(fx.tcx, drop_instance))
+    {
+        fx.bcx.ins().jump(ret_block, &[]);
     } else {
         match ty.kind() {
             ty::Dynamic(_, _) => {
@@ -835,12 +851,12 @@ pub(crate) fn codegen_drop<'tcx>(
 }
 
 #[derive(Copy, Clone)]
-pub(crate) enum CallTarget {
+pub enum CallTarget {
     Direct(FuncRef),
     Indirect(SigRef, Value),
 }
 
-pub(crate) fn codegen_call_with_unwind_action(
+pub fn codegen_call_with_unwind_action(
     fx: &mut FunctionCx<'_, '_, '_>,
     span: Span,
     func_ref: CallTarget,

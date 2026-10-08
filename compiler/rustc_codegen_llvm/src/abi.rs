@@ -635,6 +635,9 @@ impl<'ll, 'tcx> FnAbiLlvmExt<'ll, 'tcx> for FnAbi<'tcx, Ty<'tcx>> {
                 cx.sanitizer_ignorelist.as_ref(),
             );
         }
+        if let Some(extension) = cx.tcx.sess.extensions.get::<crate::extensions::Providers>() {
+            (extension.function_attrs)(cx, instance, llfn);
+        }
     }
 
     fn apply_attrs_callsite(&self, bx: &mut Builder<'_, 'll, 'tcx>, callsite: &'ll Value) {

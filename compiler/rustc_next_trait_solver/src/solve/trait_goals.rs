@@ -1765,6 +1765,43 @@ where
         goal: Goal<I, TraitClause<I>>,
     ) -> Result<(CanonicalResponse<I>, Option<TraitGoalProvenVia>), NoSolutionOrRerunNonErased>
     {
+        if goal.predicate.polarity == ClausePolarity::Positive {
+            match self.external_trait_decision(goal.predicate.trait_ref) {
+                None => {}
+                Some(Ok(true)) => {
+                    let candidate = self
+                        .probe_builtin_trait_candidate(BuiltinImplSource::Misc)
+                        .enter(|ecx| {
+                            ecx.evaluate_added_goals_and_make_canonical_response(Certainty::Yes)
+                        })?;
+                    let failed_candidate_info =
+                        FailedCandidateInfo { param_env_head_usages: Default::default() };
+                    return self
+                        .merge_trait_candidates(
+                            goal.predicate.def_id(),
+                            vec![candidate],
+                            failed_candidate_info,
+                        )
+                        .map_err(Into::into);
+                }
+                Some(Ok(false)) => return Err(NoSolution.into()),
+                Some(Err(())) => {
+                    let (mut candidates, failed_candidate_info) =
+                        self.assemble_and_evaluate_candidates(goal, AssembleCandidatesFrom::All)?;
+                    if candidates.is_empty() {
+                        candidates.push(self.forced_ambiguity(MaybeInfo::AMBIGUOUS)?);
+                    }
+                    return self
+                        .merge_trait_candidates(
+                            goal.predicate.def_id(),
+                            candidates,
+                            failed_candidate_info,
+                        )
+                        .map_err(Into::into);
+                }
+            }
+        }
+
         let (candidates, failed_candidate_info) =
             self.assemble_and_evaluate_candidates(goal, AssembleCandidatesFrom::All)?;
         self.merge_trait_candidates(goal.predicate.def_id(), candidates, failed_candidate_info)

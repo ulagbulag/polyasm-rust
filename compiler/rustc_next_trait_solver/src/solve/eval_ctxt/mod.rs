@@ -1570,6 +1570,10 @@ where
         self.delegate.is_transmutable(dst, src, assume)
     }
 
+    pub(super) fn external_trait_decision(&self, trait_ref: ty::TraitRef<I>) -> Option<Result<bool, ()>> {
+        self.delegate.external_trait_decision(trait_ref)
+    }
+
     pub(super) fn replace_bound_vars<T: TypeFoldable<I>>(
         &self,
         t: T,

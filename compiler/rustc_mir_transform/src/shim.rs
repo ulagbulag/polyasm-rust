@@ -178,6 +178,7 @@ fn make_shim<'tcx>(tcx: TyCtxt<'tcx>, shim: ty::ShimKind<'tcx>) -> Body<'tcx> {
     debug!("make_shim({:?}) = untransformed {:?}", shim, result);
 
     deref_finder(tcx, &mut result, false);
+    tcx.prepare_external_shim(shim, &mut result);
 
     // We don't validate MIR here because the shims may generate code that's
     // only valid in a `PostAnalysis` param-env. However, since we do initial

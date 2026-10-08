@@ -57,6 +57,7 @@ fn enforce_trait_manually_implementable(
     trait_def_id: DefId,
     trait_def: &ty::TraitDef,
 ) -> Result<(), ErrorGuaranteed> {
+    tcx.external_trait_impl(impl_def_id, trait_def_id)?;
     let impl_header_span = tcx.def_span(impl_def_id);
 
     if tcx.is_lang_item(trait_def_id, LangItem::Freeze) && !tcx.features().freeze_impls() {

@@ -71,6 +71,7 @@ pub fn extern_abi_stability(abi: ExternAbi) -> Result<(), UnstableAbi> {
         | ExternAbi::C { .. }
         | ExternAbi::Cdecl { .. }
         | ExternAbi::Custom
+        | ExternAbi::Polyasm
         | ExternAbi::Stdcall { .. }
         | ExternAbi::Fastcall { .. }
         | ExternAbi::Thiscall { .. }

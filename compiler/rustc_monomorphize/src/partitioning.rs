@@ -223,6 +223,7 @@ where
         // So even if its mode is LocalCopy, we need to treat it like a root.
         match mono_item.instantiation_mode(cx.tcx) {
             InstantiationMode::GloballyShared { .. } => {}
+            InstantiationMode::LocalCopy if cx.tcx.external_mono_linkage(mono_item).is_some() => {}
             InstantiationMode::LocalCopy => continue,
         }
 
@@ -761,6 +762,10 @@ fn mono_item_linkage_and_visibility<'tcx>(
     can_export_generics: bool,
     always_export_generics: bool,
 ) -> (Linkage, Visibility) {
+    if let Some(linkage) = tcx.external_mono_linkage(*mono_item) {
+        *can_be_internalized = false;
+        return linkage;
+    }
     if let Some(explicit_linkage) = mono_item.explicit_linkage(tcx) {
         return (explicit_linkage, Visibility::Default);
     }

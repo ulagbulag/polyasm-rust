@@ -16,12 +16,17 @@ use crate::query::on_disk_cache::CacheEncoder;
 use crate::ty::{self, Ty, TyCtxt};
 
 macro_rules! declare_hooks {
+    (@default $name:ident ($($arg:ident),*) = $default:expr) => { $default };
+    (@default $name:ident ($($arg:ident),*)) => {
+        |_, $($arg,)*| default_hook(stringify!($name))
+    };
+
     (
         $(
             $(#[$attr:meta])*
             hook $name:ident(
                 $( $arg:ident: $K:ty ),* $(,)?
-            ) -> $V:ty;
+            ) -> $V:ty $(= $default:expr)?;
         )*
     ) => {
 
@@ -48,7 +53,7 @@ macro_rules! declare_hooks {
                 #[allow(unused)]
                 Providers {
                     $($name:
-                        |_, $($arg,)*| default_hook(stringify!($name))),*
+                        declare_hooks!(@default $name ($($arg),*) $(= $default)?)),*
                 }
             }
         }
@@ -61,6 +66,21 @@ macro_rules! declare_hooks {
 }
 
 declare_hooks! {
+    hook prepare_external_shim(shim: ty::ShimKind<'tcx>, body: &mut mir::Body<'tcx>) -> () = |_, _, _| {};
+    hook retain_external_goal(predicate: ty::Predicate<'tcx>, span: rustc_span::Span, body: LocalDefId, seen: &mut rustc_data_structures::fx::FxHashSet<(ty::Predicate<'tcx>, rustc_span::Span, LocalDefId)>) -> bool = |_, _, _, _, _| true;
+    hook external_trait_decision(trait_ref: ty::TraitRef<'tcx>) -> Option<Result<bool, ()>> = |_, _| None;
+    hook is_external_builtin_trait(def_id: DefId) -> bool = |_, _| false;
+    hook external_trait_rejection(trait_ref: ty::TraitRef<'tcx>, span: rustc_span::Span) -> Option<(rustc_span::Span, String)> = |_, _, _| None;
+    hook check_external_instance(instance: ty::Instance<'tcx>) -> () = |_, _| {};
+    hook external_inline_policy(caller: DefId, callee: DefId, forced: bool) -> Result<(), &'static str> = |_, _, _, _| Ok(());
+    hook external_mono_roots() -> Vec<crate::mono::MonoItem<'tcx>> = |_| Vec::new();
+    hook external_instance_uses(instance: ty::Instance<'tcx>, span: rustc_span::Span) -> Vec<ty::Instance<'tcx>> = |_, _, _| Vec::new();
+    hook allow_instance_reification(instance: ty::Instance<'tcx>, span: rustc_span::Span) -> bool = |_, _, _| true;
+    hook external_mono_linkage(item: crate::mono::MonoItem<'tcx>) -> Option<(rustc_attr_ir::Linkage, crate::mono::Visibility)> = |_, _| None;
+    hook adjust_external_abi(cx: &crate::ty::layout::LayoutCx<'tcx>, abi: &mut rustc_target::callconv::FnAbi<'tcx, Ty<'tcx>>, convention: rustc_abi::ExternAbi) -> bool = |_, _, _, _| false;
+    hook external_trait_impl(impl_id: LocalDefId, trait_id: DefId) -> Result<(), rustc_span::ErrorGuaranteed> = |_, _, _| Ok(());
+    hook skip_mono_item_body(instance: ty::Instance<'tcx>) -> bool = |_, _| false;
+    hook external_intrinsic_signature(def_id: LocalDefId) -> Option<(usize, usize, usize, ty::PolyFnSig<'tcx>)> = |_, _| None;
     /// Tries to destructure an `mir::Const` ADT or array into its variant index
     /// and its field values. This should only be used for pretty printing.
     hook try_destructure_mir_constant_for_user_output(val: mir::ConstValue, ty: Ty<'tcx>) -> Option<mir::DestructuredConstant<'tcx>>;

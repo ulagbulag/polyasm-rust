@@ -9,7 +9,7 @@ use rustc_symbol_mangling::mangle_internal_symbol;
 
 use crate::prelude::*;
 
-pub(crate) fn codegen(tcx: TyCtxt<'_>, module: &mut dyn Module, methods: &[AllocatorMethod]) {
+pub fn codegen(tcx: TyCtxt<'_>, module: &mut dyn Module, methods: &[AllocatorMethod]) {
     let usize_ty = module.target_config().pointer_type();
 
     for method in methods {

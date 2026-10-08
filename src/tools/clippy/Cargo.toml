@@ -68,4 +68,4 @@ harness = false
 
 [lints.rust.unexpected_cfgs]
 level = "warn"
-check-cfg = ['cfg(bootstrap)']
+check-cfg = ['cfg(bootstrap)', 'cfg(polyasm)']

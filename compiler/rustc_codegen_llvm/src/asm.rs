@@ -533,7 +533,7 @@ impl<'tcx> AsmCodegenMethods<'tcx> for CodegenCx<'_, 'tcx> {
     }
 }
 
-pub(crate) fn inline_asm_call<'ll>(
+pub fn inline_asm_call<'ll>(
     bx: &mut Builder<'_, 'll, '_>,
     asm: &str,
     cons: &str,
