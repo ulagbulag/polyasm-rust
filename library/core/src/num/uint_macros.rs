@@ -873,7 +873,7 @@ macro_rules! uint_impl {
         #[inline(always)]
         pub const fn from_le(x: Self) -> Self {
             cfg_select! {
-                target_endian = "little" => x,
+                any(target_endian = "little", target_abi = "polyasm") => x,
                 _ => x.swap_bytes(),
             }
         }
@@ -929,7 +929,7 @@ macro_rules! uint_impl {
         #[inline(always)]
         pub const fn to_le(self) -> Self {
             cfg_select! {
-                target_endian = "little" => self,
+                any(target_endian = "little", target_abi = "polyasm") => self,
                 _ => self.swap_bytes(),
             }
         }

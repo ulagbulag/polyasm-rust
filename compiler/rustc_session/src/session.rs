@@ -28,9 +28,9 @@ use rustc_span::{RealFileName, Span, Symbol};
 use rustc_structures::{CrateType, Limit};
 use rustc_target::asm::InlineAsmArch;
 use rustc_target::spec::{
-    Arch, CfgAbi, CodeModel, DebuginfoKind, MergeFunctions, Os, PanicStrategy, RelocModel,
-    RelroLevel, SanitizerSet, SmallDataThresholdSupport, SplitDebuginfo, StackProtector,
-    SymbolVisibility, Target, TargetTuple, TlsModel, apple,
+    Arch, CfgAbi, CodeModel, DebuginfoKind, MergeFunctions, Os, POLYASM_TARGET_TUPLES,
+    PanicStrategy, RelocModel, RelroLevel, SanitizerSet, SmallDataThresholdSupport, SplitDebuginfo,
+    StackProtector, SymbolVisibility, Target, TargetTuple, TlsModel, apple,
 };
 
 use crate::code_stats::CodeStats;
@@ -38,7 +38,8 @@ pub use crate::code_stats::{DataTypeKind, FieldInfo, FieldKind, SizeKind, Varian
 use crate::config::{
     self, BranchProtection, Cfg, CheckCfg, CoverageLevel, CoverageOptions, DebugInfo,
     ErrorOutputType, FunctionReturn, Input, InstrumentCoverage, InstrumentMcount, LtoCli,
-    NATIVE_CPU, OutFileName, OutputType, PAuthKey, PointerAuthOption, SwitchWithOptPath,
+    NATIVE_CPU, NextSolverConfig, OutFileName, OutputType, PAuthKey, PointerAuthOption,
+    SwitchWithOptPath,
 };
 use crate::filesearch::FileSearch;
 use crate::lint::LintId;
@@ -335,6 +336,23 @@ pub struct EarlySession {
 // JUSTIFICATION: defn of the suggested wrapper fns
 #[allow(rustc::bad_opt_access)]
 impl EarlySession {
+    /// Whether this session uses one of rustc's built-in PolyASM targets.
+    ///
+    /// `target_abi = "polyasm"` alone carries zero authority: a custom target
+    /// specification selects any public ABI string. Keep compiler-only
+    /// semantics tied to the exact built-in tuples as well as its ABI marker.
+    ///
+    /// The three tuples are one architecture at three pointer widths, so every
+    /// compiler-private PolyASM rule applies to all of them; the width stays
+    /// with the target spec, which states it.
+    pub fn is_polyasm_target(&self) -> bool {
+        matches!(
+            &self.opts.target_triple,
+            TargetTuple::TargetTuple(tuple)
+                if POLYASM_TARGET_TUPLES.contains(&tuple.as_str())
+        ) && self.target.cfg_abi == CfgAbi::Polyasm
+    }
+
     #[inline]
     pub fn dcx(&self) -> DiagCtxtHandle<'_> {
         self.psess.dcx()
@@ -1543,6 +1561,34 @@ pub fn generate_proc_macro_decls_symbol(stable_crate_id: StableCrateId) -> Strin
 // JUSTIFICATION: needs to access args to validate them
 #[allow(rustc::bad_opt_access)]
 fn validate_commandline_args_with_session_available(sess: &Session) {
+    // Two backends emit `.poly`: Cranelift builds the image itself, and LLVM
+    // hands its bitcode to the in-process lowering that owns the LLVM-to-PolyASM
+    // boundary. These two are the backends that produce bytecode. The same pair is
+    // named where the backend is loaded, in `rustc_interface`.
+    if sess.is_polyasm_target()
+        && sess
+            .opts
+            .unstable_opts
+            .codegen_backend
+            .as_deref()
+            .is_some_and(|backend| !matches!(backend, "cranelift" | "llvm"))
+    {
+        sess.dcx().fatal(
+            "the PolyASM target requires a codegen backend that emits `.poly` bytecode; only Cranelift and LLVM do",
+        );
+    }
+    if sess.is_polyasm_target() && sess.opts.cg.prefer_dynamic {
+        sess.dcx().fatal(
+            "`-Cprefer-dynamic` is not supported for PolyASM; final images link only static target archives",
+        );
+    }
+    if sess.is_polyasm_target() && sess.opts.unstable_opts.next_solver == NextSolverConfig::Globally
+    {
+        sess.dcx().fatal(
+            "`-Znext-solver=globally` is not supported for the PolyASM target because it bypasses compiler-derived `Always` witness",
+        );
+    }
+
     // Since we don't know if code in an rlib will be linked to statically or
     // dynamically downstream, rustc generates `__imp_` symbols that help linkers
     // on Windows deal with this lack of knowledge (#27438). Unfortunately,

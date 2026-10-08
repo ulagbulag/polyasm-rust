@@ -231,6 +231,8 @@ pub fn provide(providers: &mut Providers) {
         is_mir_available,
         mir_callgraph_cyclic: inline::cycle::mir_callgraph_cyclic,
         mir_inliner_callees: inline::cycle::mir_inliner_callees,
+        polyasm_witness_def_ids: inline::polyasm_witness_def_ids,
+        polyasm_witness_only_wrapper: inline::polyasm_witness_only_wrapper,
         promoted_mir,
         deduced_param_attrs: deduce_param_attrs::deduced_param_attrs,
         coroutine_by_move_body_def_id: coroutine::coroutine_by_move_body_def_id,

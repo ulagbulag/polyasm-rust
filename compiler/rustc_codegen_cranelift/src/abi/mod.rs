@@ -15,12 +15,20 @@ use cranelift_module::ModuleError;
 use rustc_abi::{CanonAbi, ExternAbi, X86Call};
 use rustc_codegen_ssa::base::is_call_from_compiler_builtins_to_upstream_monomorphization;
 use rustc_codegen_ssa::diagnostics::CompilerBuiltinsCannotCall;
+use rustc_codegen_ssa::polyasm::{
+    normalized_polyasm_static_schedule, polyasm_static_callable_selection,
+    polyasm_static_callable_selection_on, polyasm_static_clock_hz,
+};
+use rustc_data_structures::fx::FxHashSet;
+use rustc_hir::def::DefKind;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
+use rustc_middle::mono::resolve_polyasm_callable;
+use rustc_middle::ty::consts::ConstExt;
 use rustc_middle::ty::layout::FnAbiOf;
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_middle::ty::{ShimKind, TypeVisitableExt};
 use rustc_session::Session;
-use rustc_span::Spanned;
+use rustc_span::{Spanned, sym};
 use rustc_target::callconv::{FnAbi, PassMode};
 use rustc_target::spec::Arch;
 use smallvec::{SmallVec, smallvec};
@@ -189,8 +197,10 @@ impl<'tcx> FunctionCx<'_, '_, 'tcx> {
             Cow::Owned(vec![codegen_bitcast(self, types::I128, ret)])
         } else if (ret_single_i128 && self.tcx.sess.target.arch == Arch::S390x)
             || (ret_single_f128 && indirect_f128)
+            || (self.tcx.sess.target.arch == Arch::Wasm32 && (ret_single_i128 || ret_single_f128))
         {
-            // Return x86_64 Windows f128 and s390x i128 indirectly (sret in LLVM terminology).
+            // Return x86_64 Windows f128, s390x i128, and wasm32 i128 and f128 indirectly (sret
+            // in LLVM terminology).
             let ret_ty = returns[0].value_type;
             let mut params = params;
             let mut args = args.to_vec();
@@ -215,8 +225,22 @@ impl<'tcx> FunctionCx<'_, '_, 'tcx> {
         args: &[Value],
     ) -> &[Value] {
         let sig = Signature { params, returns, call_conv: self.target_config.default_call_conv };
-        let func_id = declare_import_function(self.tcx, self.module, name, &sig);
-        let func_ref = self.module.declare_func_in_func(func_id, self.bcx.func);
+        let func_ref = if crate::driver::polyasm::is_target(self.tcx.sess) && name == "memcmp" {
+            // Preserve the compiler-generated comparison as a typed libcall
+            // so executable translation emits MemoryCompare.
+            let signature = self.bcx.import_signature(sig);
+            self.bcx.import_function(cranelift_codegen::ir::ExtFuncData {
+                name: cranelift_codegen::ir::ExternalName::LibCall(
+                    cranelift_codegen::ir::LibCall::Memcmp,
+                ),
+                signature,
+                colocated: false,
+                patchable: false,
+            })
+        } else {
+            let func_id = declare_import_function(self.tcx, self.module, name, &sig);
+            self.module.declare_func_in_func(func_id, self.bcx.func)
+        };
         let call_inst = self.bcx.ins().call(func_ref, args);
         if self.clif_comments.enabled() {
             self.add_comment(func_ref, format!("{:?}", name));
@@ -423,6 +447,317 @@ fn codegen_call_argument_operand<'tcx>(
     }
 }
 
+fn codegen_polyasm_static_invoke<'tcx>(
+    fx: &mut FunctionCx<'_, '_, 'tcx>,
+    source_info: mir::SourceInfo,
+    func: &Operand<'tcx>,
+    args: &[Spanned<Operand<'tcx>>],
+    destination: Place<'tcx>,
+    target: Option<BasicBlock>,
+    unwind: UnwindAction,
+) -> bool {
+    let Some((def_id, generic_args)) = func.const_fn_def() else {
+        return false;
+    };
+    let exact = fx.tcx.is_diagnostic_item(sym::polyasm_invoke_static_faster_exact, def_id);
+    let on = fx.tcx.is_diagnostic_item(sym::polyasm_invoke_static_faster_on, def_id);
+    if !exact && !on && !fx.tcx.is_diagnostic_item(sym::polyasm_invoke_static_faster, def_id) {
+        return false;
+    }
+    let [lhs, rhs] = args else {
+        fx.tcx
+            .dcx()
+            .span_err(source_info.span, "PolyASM static selection marker has an invalid ABI");
+        fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+        return true;
+    };
+    let generic_args = fx.monomorphize(generic_args);
+    if exact || on {
+        let lhs_ty = fx.monomorphize(lhs.node.ty(&fx.mir.local_decls, fx.tcx));
+        let rhs_ty = fx.monomorphize(rhs.node.ty(&fx.mir.local_decls, fx.tcx));
+        if lhs_ty != generic_args.type_at(0) || rhs_ty != generic_args.type_at(1) {
+            fx.tcx.dcx().span_err(
+                source_info.span,
+                "PolyASM exact static selection operands changed callable identity",
+            );
+            fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+            return true;
+        }
+    }
+    let selection = if on {
+        match polyasm_static_callable_selection_on(fx.tcx, generic_args, source_info.span) {
+            Ok(selection) => selection,
+            Err(_error) => {
+                // The semantic-domain emitter owns this source-located
+                // diagnostic. The executable lowering still terminates its
+                // block and leaves the diagnostic to that emitter.
+                fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+                return true;
+            }
+        }
+    } else {
+        let Some(selection) =
+            polyasm_static_callable_selection(fx.tcx, generic_args, source_info.span)
+        else {
+            fx.tcx.dcx().span_err(
+                source_info.span,
+                "PolyASM static selection requires two closed compiler-checked schedules",
+            );
+            fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+            return true;
+        };
+        selection
+    };
+    let selected = selection.selected();
+    let selected_ty = selection.selected_ty();
+    let selected_layout = fx.layout_of(selected_ty);
+    if selected_layout.size.bytes() != 0 {
+        fx.tcx.dcx().span_err(
+            source_info.span,
+            "PolyASM static selection cannot bind a runtime callable environment",
+        );
+        fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+        return true;
+    }
+    let ret_place = codegen_place(fx, destination);
+    let fn_abi = FullyMonomorphizedLayoutCx(fx.tcx).fn_abi_of_instance(selected, ty::List::empty());
+    let mut call_args = if fx.tcx.def_kind(selected.def_id()) == DefKind::Closure {
+        let Some(environment) = fn_abi.args.first() else {
+            fx.tcx
+                .dcx()
+                .span_err(source_info.span, "PolyASM selected closure has no environment ABI");
+            fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+            return true;
+        };
+        let (value, is_owned) = if environment.layout.ty == selected_ty {
+            (CValue::zst(selected_layout), true)
+        } else if let ty::Ref(_, pointee, _) = *environment.layout.ty.kind()
+            && pointee == selected_ty
+        {
+            let address = Pointer::dangling(selected_layout.align.abi).get_addr(fx);
+            (CValue::by_val(address, environment.layout), false)
+        } else {
+            fx.tcx.dcx().span_err(
+                source_info.span,
+                "PolyASM selected closure has an unsupported environment ABI",
+            );
+            fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+            return true;
+        };
+        vec![CallArgument { value, is_owned }]
+    } else {
+        Vec::new()
+    };
+    if selected.def.requires_caller_location(fx.tcx) {
+        call_args
+            .push(CallArgument { value: fx.get_caller_location(source_info), is_owned: false });
+    }
+    if fn_abi.args.len() != call_args.len() {
+        fx.tcx
+            .dcx()
+            .span_err(source_info.span, "PolyASM selected callable has an unexpected compiler ABI");
+        fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+        return true;
+    }
+    if fx.tcx.codegen_instance_attrs(selected.def).flags.contains(CodegenFnAttrFlags::COLD) {
+        fx.bcx.set_cold_block(fx.bcx.current_block().unwrap());
+        if let Some(destination_block) = target {
+            fx.bcx.set_cold_block(fx.get_block(destination_block));
+        }
+    }
+    let func_ref = CallTarget::Direct(fx.get_function_ref(selected));
+    self::returning::codegen_with_call_return_arg(fx, &fn_abi.ret, ret_place, |fx, return_ptr| {
+        let call_args = return_ptr
+            .into_iter()
+            .chain(call_args.into_iter().enumerate().flat_map(|(index, argument)| {
+                adjust_arg_for_abi(fx, argument.value, &fn_abi.args[index], argument.is_owned)
+                    .into_iter()
+            }))
+            .collect::<Vec<Value>>();
+        codegen_call_with_unwind_action(fx, source_info.span, func_ref, unwind, &call_args, None)
+    });
+    if let Some(destination) = target {
+        let destination = fx.get_block(destination);
+        fx.bcx.ins().jump(destination, &[]);
+    } else {
+        fx.bcx.ins().trap(TrapCode::user(1).unwrap());
+    }
+    true
+}
+
+fn polyasm_u64_const<'tcx>(tcx: TyCtxt<'tcx>, constant: ty::Const<'tcx>) -> Option<u64> {
+    let value = constant.try_to_value()?;
+    if value.ty != tcx.types.u64 {
+        return None;
+    }
+    value.try_to_bits(tcx, ty::TypingEnv::fully_monomorphized())?.try_into().ok()
+}
+
+fn codegen_polyasm_static_bind<'tcx>(
+    fx: &mut FunctionCx<'_, '_, 'tcx>,
+    source_info: mir::SourceInfo,
+    func: &Operand<'tcx>,
+    args: &[Spanned<Operand<'tcx>>],
+    destination: Place<'tcx>,
+    target: Option<BasicBlock>,
+) -> bool {
+    let Some((def_id, generic_args)) = func.const_fn_def() else {
+        return false;
+    };
+    if !fx.tcx.is_diagnostic_item(sym::polyasm_bind_static_clock, def_id) {
+        return false;
+    }
+    let [argument] = args else {
+        fx.tcx
+            .dcx()
+            .span_err(source_info.span, "PolyASM static-clock binding marker has an invalid ABI");
+        fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+        return true;
+    };
+    let generic_args = fx.monomorphize(generic_args);
+    let callable_ty = generic_args.type_at(1);
+    let argument_ty = fx.monomorphize(argument.node.ty(&fx.mir.local_decls, fx.tcx));
+    let closed = match *callable_ty.kind() {
+        ty::FnDef(..) => true,
+        ty::Closure(_, args) => args.as_closure().tupled_upvars_ty().is_unit(),
+        _ => false,
+    };
+    let Some(callable) = (argument_ty == callable_ty && closed)
+        .then(|| resolve_polyasm_callable(fx.tcx, callable_ty, source_info.span))
+        .flatten()
+    else {
+        fx.tcx.dcx().span_err(
+            source_info.span,
+            "PolyASM static-clock binding lost its closed callable identity",
+        );
+        fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+        return true;
+    };
+    let requested_cycles = polyasm_u64_const(fx.tcx, generic_args.const_at(2));
+    let architecture = generic_args.type_at(0);
+    let clock_hz = polyasm_static_clock_hz(fx.tcx, architecture);
+    let (Some(requested_cycles), Some(clock_hz)) = (requested_cycles, clock_hz) else {
+        fx.tcx.dcx().span_err(
+            source_info.span,
+            "PolyASM static-clock binding does not have a concrete registered schedule",
+        );
+        fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+        return true;
+    };
+    if clock_hz == 0
+        || normalized_polyasm_static_schedule(fx.tcx, callable, architecture)
+            != Some(requested_cycles)
+    {
+        fx.tcx.dcx().span_err(
+            source_info.span,
+            "PolyASM static-clock binding does not match the normalized callable schedule",
+        );
+        fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+        return true;
+    }
+    let destination_ty = fx.monomorphize(destination.ty(&fx.mir.local_decls, fx.tcx).ty);
+    let ty::Adt(destination_definition, destination_args) = *destination_ty.kind() else {
+        fx.tcx.dcx().span_err(
+            source_info.span,
+            "PolyASM static-clock binding has an invalid destination representation",
+        );
+        fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+        return true;
+    };
+    if !fx.tcx.is_diagnostic_item(sym::polyasm_static_callable, destination_definition.did())
+        || destination_args.len() != 3
+        || destination_args.type_at(0) != callable_ty
+        || destination_args.type_at(1) != architecture
+        || polyasm_u64_const(fx.tcx, destination_args.const_at(2)) != Some(requested_cycles)
+    {
+        fx.tcx.dcx().span_err(
+            source_info.span,
+            "PolyASM static-clock binding destination does not preserve its exact callable schedule",
+        );
+        fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+        return true;
+    }
+    let destination_layout = fx.layout_of(destination_ty);
+    if fx.layout_of(callable_ty).size.bytes() != 0 || destination_layout.fields.count() != 3 {
+        fx.tcx.dcx().span_err(
+            source_info.span,
+            "PolyASM static-clock binding cannot retain a runtime callable environment",
+        );
+        fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+        return true;
+    }
+    let callable_layout = destination_layout.field(&*fx, 0);
+    let warrant_layout = destination_layout.field(&*fx, 1);
+    let architecture_layout = destination_layout.field(&*fx, 2);
+    if callable_layout.ty != callable_ty
+        || callable_layout.size.bytes() != 0
+        || architecture_layout.size.bytes() != 0
+        || warrant_layout.fields.count() != 2
+    {
+        fx.tcx.dcx().span_err(
+            source_info.span,
+            "PolyASM static-clock binding has an incompatible witness layout",
+        );
+        fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+        return true;
+    }
+    let property_layout = warrant_layout.field(&*fx, 0);
+    let schedule_layout = warrant_layout.field(&*fx, 1);
+    if property_layout.size.bytes() != 0 || schedule_layout.fields.count() != 2 {
+        fx.tcx.dcx().span_err(
+            source_info.span,
+            "PolyASM static-clock binding has an incompatible warrant layout",
+        );
+        fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+        return true;
+    }
+    let clock_layout = schedule_layout.field(&*fx, 0);
+    let cycles_layout = schedule_layout.field(&*fx, 1);
+    let clock_offset = destination_layout.fields.offset(1).bytes()
+        + warrant_layout.fields.offset(1).bytes()
+        + schedule_layout.fields.offset(0).bytes();
+    let cycles_offset = destination_layout.fields.offset(1).bytes()
+        + warrant_layout.fields.offset(1).bytes()
+        + schedule_layout.fields.offset(1).bytes();
+    let BackendRepr::ScalarPair { a, b, b_offset } = destination_layout.backend_repr else {
+        fx.tcx.dcx().span_err(
+            source_info.span,
+            "PolyASM static-clock binding has a non-scalar schedule representation",
+        );
+        fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+        return true;
+    };
+    let b_offset = b_offset.bytes();
+    let cycles_first = (cycles_offset, clock_offset) == (0, b_offset);
+    let clock_first = (clock_offset, cycles_offset) == (0, b_offset);
+    if cycles_layout.ty != fx.tcx.types.u64
+        || clock_layout.size.bytes() != 8
+        || !matches!(clock_layout.backend_repr, BackendRepr::Scalar(_))
+        || scalar_to_clif_type(fx.tcx, a) != types::I64
+        || scalar_to_clif_type(fx.tcx, b) != types::I64
+        || (!cycles_first && !clock_first)
+    {
+        fx.tcx.dcx().span_err(
+            source_info.span,
+            "PolyASM static-clock binding cannot materialize its exact schedule payload",
+        );
+        fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+        return true;
+    }
+    let cycles = fx.bcx.ins().iconst(types::I64, requested_cycles as i64);
+    let clock_hz = fx.bcx.ins().iconst(types::I64, clock_hz as i64);
+    let (first, second) = if cycles_first { (cycles, clock_hz) } else { (clock_hz, cycles) };
+    codegen_place(fx, destination)
+        .write_cvalue(fx, CValue::by_val_pair(first, second, destination_layout));
+    if let Some(target) = target {
+        let target = fx.get_block(target);
+        fx.bcx.ins().jump(target, &[]);
+    } else {
+        fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+    }
+    true
+}
+
 pub(crate) fn codegen_terminator_call<'tcx>(
     fx: &mut FunctionCx<'_, '_, 'tcx>,
     source_info: mir::SourceInfo,
@@ -432,6 +767,91 @@ pub(crate) fn codegen_terminator_call<'tcx>(
     target: Option<BasicBlock>,
     unwind: UnwindAction,
 ) {
+    if fx.tcx.sess.is_polyasm_target()
+        && codegen_polyasm_static_bind(fx, source_info, func, args, destination, target)
+    {
+        return;
+    }
+    if fx.tcx.sess.is_polyasm_target()
+        && codegen_polyasm_static_invoke(fx, source_info, func, args, destination, target, unwind)
+    {
+        return;
+    }
+    if fx.tcx.sess.is_polyasm_target()
+        && func.const_fn_def().is_some_and(|(def_id, _)| {
+            fx.tcx.is_diagnostic_item(sym::polyasm_require_always, def_id)
+                || fx.tcx.is_diagnostic_item(sym::polyasm_require_not_always, def_id)
+        })
+    {
+        let [_argument] = args else {
+            fx.tcx
+                .dcx()
+                .span_err(source_info.span, "PolyASM callable warrant marker has an invalid ABI");
+            fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+            return;
+        };
+        if let Some(target) = target {
+            let target = fx.get_block(target);
+            fx.bcx.ins().jump(target, &[]);
+        } else {
+            fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+        }
+        return;
+    }
+
+    // An offload request answers its own argument back, exactly as a
+    // statement marker does, so both close here by writing that argument
+    // into the destination in place of emitting a call.
+    if fx.tcx.sess.is_polyasm_target()
+        && func.const_fn_def().is_some_and(|(def_id, _)| {
+            fx.tcx.is_diagnostic_item(sym::polyasm_require_statement, def_id)
+                || fx.tcx.is_diagnostic_item(sym::polyasm_offload, def_id)
+                || fx.tcx.is_diagnostic_item(sym::polyasm_request_offload, def_id)
+        })
+    {
+        let [argument] = args else {
+            fx.tcx
+                .dcx()
+                .span_err(source_info.span, "PolyASM value-answering marker has an invalid ABI");
+            fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+            return;
+        };
+        let value = codegen_operand(fx, &argument.node);
+        let destination = codegen_place(fx, destination);
+        destination.write_cvalue(fx, value);
+        if let Some(target) = target {
+            let target = fx.get_block(target);
+            fx.bcx.ins().jump(target, &[]);
+        } else {
+            fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+        }
+        return;
+    }
+
+    if fx.tcx.sess.is_polyasm_target()
+        && func
+            .const_fn_def()
+            .and_then(|(def_id, args)| {
+                ty::Instance::try_resolve(
+                    fx.tcx,
+                    ty::TypingEnv::fully_monomorphized(),
+                    def_id,
+                    fx.monomorphize(args),
+                )
+                .ok()
+                .flatten()
+            })
+            .is_some_and(|instance| fx.tcx.polyasm_witness_only_wrapper(instance))
+    {
+        if let Some(target) = target {
+            let target = fx.get_block(target);
+            fx.bcx.ins().jump(target, &[]);
+        } else {
+            fx.bcx.ins().trap(TrapCode::user(2).unwrap());
+        }
+        return;
+    }
+
     let func = codegen_operand(fx, func);
     let fn_sig = func.layout().ty.fn_sig(fx.tcx);
 
@@ -735,6 +1155,111 @@ pub(crate) fn codegen_terminator_call<'tcx>(
     }
 }
 
+/// Answers whether running one drop glue would leave the program as it was.
+///
+/// `ShimKind::DropGlue(_, None)` already states an empty drop, and
+/// the arm above it answers that. This answers the one beside it: a glue that
+/// *exists* and whose body, once the shim was built and elaborated, writes
+/// zero bytes and asserts zero conditions, and whose every drop and every call names a
+/// body that answers the same. `Box<T>` over a zero-sized `T` is what sits at
+/// the bottom of it -- deallocating zero bytes is empty work, and what the glue is
+/// left holding is a bare `return`.
+///
+/// The whole body is skipped in place of trimmed, so every read stays
+/// unasked: a load stays unrun, and every program leaves a place being read
+/// unobserved. A write is observed, and so are a call, an assertion, an unwind
+/// edge and a discriminant store, and each of those stops the answer. A
+/// projection on the left of an assignment is a write through a pointer and
+/// stops it too, which is why the place names a bare local.
+///
+/// A missing `SwitchInt` arm in the terminator list would leave the `Option`
+/// case unanswered, and the presence of `Assert` there would make the answer
+/// wrong.
+///
+/// A `Drop` and a `Call` are answered by the body they name in place of their
+/// own kind, because the chain this walks is four bodies deep and the
+/// emptiness sits at the bottom of it: `Box<T>` over a zero-sized `T` holds a
+/// bare `return`, `Option<Box<T>>` holds one `Drop` on that `Box`, `[T]` holds
+/// one `Drop` on the element inside its walk, and `[T; N]` holds one `Call` to
+/// the slice body. Reading one body alone answers `false` for the upper three
+/// and leaves a thousand calls to a body that is `mov $0,%eax; ret`. The walk
+/// skips the unwind edge on such a terminator, since only a running body
+/// unwinds, and a `Call` that lacks a return target diverges and answers `false`.
+///
+/// `answered` is what stops a glue that reaches itself: a recursive type walks
+/// back to a body already on the stack, which every finite reading leaves open,
+/// and meeting one answers `false` in place of following it.
+fn glue_leaves_the_program_unchanged<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> bool {
+    let mut answered = FxHashSet::default();
+    drop_glue_body_leaves_the_program_unchanged(tcx, instance, &mut answered)
+}
+
+fn drop_glue_body_leaves_the_program_unchanged<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    answered: &mut FxHashSet<Instance<'tcx>>,
+) -> bool {
+    match instance.def {
+        ty::InstanceKind::Shim(ty::ShimKind::DropGlue(_, None)) => return true,
+        ty::InstanceKind::Shim(ty::ShimKind::DropGlue(_, Some(_))) => {}
+        _ => return false,
+    }
+    if !answered.insert(instance) {
+        return false;
+    }
+    let typing_env = ty::TypingEnv::fully_monomorphized();
+    let body = tcx.instance_mir(instance.def);
+    body.basic_blocks.iter().all(|block| {
+        block.statements.iter().all(|statement| match &statement.kind {
+            mir::StatementKind::StorageLive(_)
+            | mir::StatementKind::StorageDead(_)
+            | mir::StatementKind::FakeRead(_)
+            | mir::StatementKind::PlaceMention(_)
+            | mir::StatementKind::AscribeUserType(_, _)
+            | mir::StatementKind::ConstEvalCounter
+            | mir::StatementKind::Nop => true,
+            mir::StatementKind::Assign(assignment) => assignment.0.projection.is_empty(),
+            _ => false,
+        }) && match &block.terminator().kind {
+            mir::TerminatorKind::Return
+            | mir::TerminatorKind::Goto { .. }
+            | mir::TerminatorKind::SwitchInt { .. }
+            | mir::TerminatorKind::Unreachable => true,
+            mir::TerminatorKind::Drop { place, drop: None, .. } => {
+                let dropped = instance.instantiate_mir_and_normalize_erasing_regions(
+                    tcx,
+                    typing_env,
+                    ty::EarlyBinder::bind(tcx, place.ty(&body.local_decls, tcx).ty),
+                );
+                !dropped.is_trait()
+                    && drop_glue_body_leaves_the_program_unchanged(
+                        tcx,
+                        Instance::resolve_drop_glue(tcx, dropped),
+                        answered,
+                    )
+            }
+            mir::TerminatorKind::Call { func, target: Some(_), .. } => {
+                let called = instance.instantiate_mir_and_normalize_erasing_regions(
+                    tcx,
+                    typing_env,
+                    ty::EarlyBinder::bind(tcx, func.ty(&body.local_decls, tcx)),
+                );
+                let ty::FnDef(def_id, bound_args) = *called.kind() else {
+                    return false;
+                };
+                let Some(args) = bound_args.no_bound_vars() else {
+                    return false;
+                };
+                let Ok(Some(callee)) = Instance::try_resolve(tcx, typing_env, def_id, args) else {
+                    return false;
+                };
+                drop_glue_body_leaves_the_program_unchanged(tcx, callee, answered)
+            }
+            _ => false,
+        }
+    })
+}
+
 pub(crate) fn codegen_drop<'tcx>(
     fx: &mut FunctionCx<'_, '_, 'tcx>,
     source_info: mir::SourceInfo,
@@ -749,6 +1274,8 @@ pub(crate) fn codegen_drop<'tcx>(
     // AsyncDropGlueCtorShim can't be here
     if let ty::InstanceKind::Shim(ty::ShimKind::DropGlue(_, None)) = drop_instance.def {
         // we don't actually need to drop anything
+        fx.bcx.ins().jump(ret_block, &[]);
+    } else if glue_leaves_the_program_unchanged(fx.tcx, drop_instance) {
         fx.bcx.ins().jump(ret_block, &[]);
     } else {
         match ty.kind() {

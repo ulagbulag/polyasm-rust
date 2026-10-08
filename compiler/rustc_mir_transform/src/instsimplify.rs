@@ -214,8 +214,21 @@ impl<'tcx> InstSimplifyContext<'_, 'tcx> {
         }
     }
 
+    /// Replaces a call to `Clone::clone` on a trivially-copy referent with a read
+    /// through the reference that was passed.
+    ///
+    /// The read is spelled by appending a `Deref` to the argument's place, and from
+    /// `MirPhase::Runtime` onwards a `Deref` is only a legal projection in first
+    /// position — `Derefer` establishes that once, at the phase change, and every
+    /// later pass keeps it. Appending therefore only preserves the invariant when
+    /// the argument's place is a bare local. MIR building always spills a call
+    /// argument into a local of its own, so that holds for every ordinary body;
+    /// `build_call_shim` untuples its tupled argument into `move (_2.0)` and hands
+    /// the projected place to the call directly, so a shim body is the one place
+    /// where it fails. The reference is copied into a place of its own first, which
+    /// is the rewrite `Derefer` itself performs.
     fn simplify_primitive_clone(
-        &self,
+        &mut self,
         terminator: &mut Terminator<'tcx>,
         statements: &mut Vec<Statement<'tcx>>,
     ) {
@@ -245,18 +258,37 @@ impl<'tcx> InstSimplifyContext<'_, 'tcx> {
         }
 
         let Some(arg_place) = arg.node.place() else { return };
+        let destination = *destination;
+        let destination_block = *destination_block;
+        let source_info = terminator.source_info;
+
+        let deref_base = match arg_place.projection.is_empty() {
+            true => arg_place,
+            false => {
+                let deref_temp =
+                    self.local_decls.push(LocalDecl::new(arg_ty, source_info.span).immutable());
+                statements.push(Statement::new(
+                    source_info,
+                    StatementKind::Assign(Box::new((
+                        Place::from(deref_temp),
+                        Rvalue::Use(Operand::Copy(arg_place), WithRetag::No),
+                    ))),
+                ));
+                Place::from(deref_temp)
+            }
+        };
 
         statements.push(Statement::new(
-            terminator.source_info,
+            source_info,
             StatementKind::Assign(Box::new((
-                *destination,
+                destination,
                 Rvalue::Use(
-                    Operand::Copy(arg_place.project_deeper(&[ProjectionElem::Deref], self.tcx)),
+                    Operand::Copy(deref_base.project_deeper(&[ProjectionElem::Deref], self.tcx)),
                     WithRetag::Yes,
                 ),
             ))),
         ));
-        terminator.kind = TerminatorKind::Goto { target: *destination_block };
+        terminator.kind = TerminatorKind::Goto { target: destination_block };
     }
 
     /// Simplify `size_of_val` and `align_of_val` if we don't actually need

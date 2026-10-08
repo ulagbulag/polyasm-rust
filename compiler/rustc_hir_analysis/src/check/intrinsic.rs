@@ -58,8 +58,23 @@ fn equate_intrinsic_type<'tcx>(
     }
 }
 
+/// Whether one intrinsic is a PolyASM instruction: an item of the module
+/// `core::polyasm::intrinsics` names as its diagnostic item.
+///
+/// That module is the one declaration of every guest-visible PolyASM
+/// instruction, and each one's declared signature is its whole statement: the
+/// codegen backends lower the call to the row its name spells over exactly
+/// the operands it declares. The family tables in that file state each row
+/// once, so this check reads the declaration as the one list.
+fn polyasm_instruction(tcx: TyCtxt<'_>, intrinsic_id: LocalDefId) -> bool {
+    tcx.is_diagnostic_item(sym::polyasm_intrinsics, tcx.parent(intrinsic_id.to_def_id()))
+}
+
 /// Returns the unsafety of the given intrinsic.
 fn intrinsic_operation_unsafety(tcx: TyCtxt<'_>, intrinsic_id: LocalDefId) -> hir::Safety {
+    if polyasm_instruction(tcx, intrinsic_id) {
+        return tcx.fn_sig(intrinsic_id).skip_binder().safety();
+    }
     let is_in_list = match tcx.item_name(intrinsic_id) {
         // When adding a new intrinsic to this list,
         // it's usually worth updating that intrinsic's documentation
@@ -155,6 +170,27 @@ fn intrinsic_operation_unsafety(tcx: TyCtxt<'_>, intrinsic_id: LocalDefId) -> hi
         | sym::offload_get_num_devices
         | sym::offset_of
         | sym::overflow_checks
+        | sym::packet_data_end
+        | sym::packet_data_load16be_abs
+        | sym::packet_data_load16be_ind
+        | sym::packet_data_load32be_abs
+        | sym::packet_data_load32be_ind
+        | sym::packet_data_load8_abs
+        | sym::packet_data_load8_ind
+        | sym::packet_data_range
+        | sym::packet_data_start
+        | sym::packet_mac_load16be_abs
+        | sym::packet_mac_load16be_ind
+        | sym::packet_mac_load32be_abs
+        | sym::packet_mac_load32be_ind
+        | sym::packet_mac_load8_abs
+        | sym::packet_mac_load8_ind
+        | sym::packet_network_load16be_abs
+        | sym::packet_network_load16be_ind
+        | sym::packet_network_load32be_abs
+        | sym::packet_network_load32be_ind
+        | sym::packet_network_load8_abs
+        | sym::packet_network_load8_ind
         | sym::powf16
         | sym::powf32
         | sym::powf64
@@ -286,9 +322,167 @@ pub(crate) fn check_intrinsic_type(
     };
     let type_id_ty = || tcx.type_of(tcx.lang_items().type_id().unwrap()).no_bound_vars().unwrap();
 
+    let packet_operands = |name, immediate| {
+        let Some(operand_id) = tcx.get_diagnostic_item(name) else {
+            return Ty::new_error(
+                tcx,
+                tcx.dcx().span_err(span, "missing PolyASM packet operand type"),
+            );
+        };
+        let region = ty::Region::new_bound(
+            tcx,
+            ty::INNERMOST,
+            ty::BoundRegion { var: ty::BoundVar::ZERO, kind: ty::BoundRegionKind::Anon },
+        );
+        let mut args = vec![region.into()];
+        if immediate {
+            let Some(constant) = generics.own_params.first() else {
+                return Ty::new_error(
+                    tcx,
+                    tcx.dcx().span_err(span, "missing packet instruction constant"),
+                );
+            };
+            if !matches!(constant.kind, ty::GenericParamDefKind::Const { .. }) {
+                return Ty::new_error(
+                    tcx,
+                    tcx.dcx().span_err(span, "packet instruction immediate must be a constant"),
+                );
+            }
+            let value = Const::new_param(tcx, ty::ParamConst::new(0, constant.name));
+            args.push(value.into());
+        }
+        Ty::new_adt(tcx, tcx.adt_def(operand_id), tcx.mk_args(&args))
+    };
+
     let safety = intrinsic_operation_unsafety(tcx, intrinsic_id);
     let n_lts = 0;
     let (n_tps, n_cts, inputs, output) = match intrinsic_name {
+        sym::packet_data_end => (
+            0,
+            0,
+            vec![packet_operands(sym::polyasm_packet_data_end_operands, false)],
+            Ty::new_imm_ptr(tcx, tcx.types.u8),
+        ),
+        sym::packet_data_load16be_abs => (
+            0,
+            1,
+            vec![packet_operands(sym::polyasm_packet_data_load16be_abs_operands, true)],
+            tcx.types.u64,
+        ),
+        sym::packet_data_load16be_ind => (
+            0,
+            0,
+            vec![packet_operands(sym::polyasm_packet_data_load16be_ind_operands, false)],
+            tcx.types.u64,
+        ),
+        sym::packet_data_load32be_abs => (
+            0,
+            1,
+            vec![packet_operands(sym::polyasm_packet_data_load32be_abs_operands, true)],
+            tcx.types.u64,
+        ),
+        sym::packet_data_load32be_ind => (
+            0,
+            0,
+            vec![packet_operands(sym::polyasm_packet_data_load32be_ind_operands, false)],
+            tcx.types.u64,
+        ),
+        sym::packet_data_load8_abs => (
+            0,
+            1,
+            vec![packet_operands(sym::polyasm_packet_data_load8_abs_operands, true)],
+            tcx.types.u64,
+        ),
+        sym::packet_data_load8_ind => (
+            0,
+            0,
+            vec![packet_operands(sym::polyasm_packet_data_load8_ind_operands, false)],
+            tcx.types.u64,
+        ),
+        sym::packet_data_range => (
+            0,
+            1,
+            vec![packet_operands(sym::polyasm_packet_data_range_operands, true)],
+            tcx.types.bool,
+        ),
+        sym::packet_data_start => (
+            0,
+            0,
+            vec![packet_operands(sym::polyasm_packet_data_start_operands, false)],
+            Ty::new_imm_ptr(tcx, tcx.types.u8),
+        ),
+        sym::packet_mac_load16be_abs => (
+            0,
+            1,
+            vec![packet_operands(sym::polyasm_packet_mac_load16be_abs_operands, true)],
+            tcx.types.u64,
+        ),
+        sym::packet_mac_load16be_ind => (
+            0,
+            0,
+            vec![packet_operands(sym::polyasm_packet_mac_load16be_ind_operands, false)],
+            tcx.types.u64,
+        ),
+        sym::packet_mac_load32be_abs => (
+            0,
+            1,
+            vec![packet_operands(sym::polyasm_packet_mac_load32be_abs_operands, true)],
+            tcx.types.u64,
+        ),
+        sym::packet_mac_load32be_ind => (
+            0,
+            0,
+            vec![packet_operands(sym::polyasm_packet_mac_load32be_ind_operands, false)],
+            tcx.types.u64,
+        ),
+        sym::packet_mac_load8_abs => (
+            0,
+            1,
+            vec![packet_operands(sym::polyasm_packet_mac_load8_abs_operands, true)],
+            tcx.types.u64,
+        ),
+        sym::packet_mac_load8_ind => (
+            0,
+            0,
+            vec![packet_operands(sym::polyasm_packet_mac_load8_ind_operands, false)],
+            tcx.types.u64,
+        ),
+        sym::packet_network_load16be_abs => (
+            0,
+            1,
+            vec![packet_operands(sym::polyasm_packet_network_load16be_abs_operands, true)],
+            tcx.types.u64,
+        ),
+        sym::packet_network_load16be_ind => (
+            0,
+            0,
+            vec![packet_operands(sym::polyasm_packet_network_load16be_ind_operands, false)],
+            tcx.types.u64,
+        ),
+        sym::packet_network_load32be_abs => (
+            0,
+            1,
+            vec![packet_operands(sym::polyasm_packet_network_load32be_abs_operands, true)],
+            tcx.types.u64,
+        ),
+        sym::packet_network_load32be_ind => (
+            0,
+            0,
+            vec![packet_operands(sym::polyasm_packet_network_load32be_ind_operands, false)],
+            tcx.types.u64,
+        ),
+        sym::packet_network_load8_abs => (
+            0,
+            1,
+            vec![packet_operands(sym::polyasm_packet_network_load8_abs_operands, true)],
+            tcx.types.u64,
+        ),
+        sym::packet_network_load8_ind => (
+            0,
+            0,
+            vec![packet_operands(sym::polyasm_packet_network_load8_ind_operands, false)],
+            tcx.types.u64,
+        ),
         sym::autodiff => (4, 0, vec![param(0), param(1), param(2)], param(3)),
         sym::abort_immediate => (0, 0, vec![], tcx.types.never),
         sym::amdgpu_dispatch_ptr => (0, 0, vec![], Ty::new_imm_ptr(tcx, tcx.types.unit)),
@@ -784,6 +978,14 @@ pub(crate) fn check_intrinsic_type(
         | sym::simd_reduce_min
         | sym::simd_reduce_max => (2, 0, vec![param(0)], param(1)),
         sym::simd_shuffle => (3, 0, vec![param(0), param(0), param(1)], param(2)),
+        sym::simd_swizzle_dyn => (1, 0, vec![param(0), param(0)], param(0)),
+        sym::simd_shl_scalar | sym::simd_shr_scalar => {
+            (1, 0, vec![param(0), tcx.types.u32], param(0))
+        }
+        sym::simd_load_unaligned => (2, 0, vec![Ty::new_imm_ptr(tcx, param(0))], param(1)),
+        sym::simd_store_unaligned => {
+            (2, 0, vec![Ty::new_mut_ptr(tcx, param(0)), param(1)], tcx.types.unit)
+        }
         sym::simd_shuffle_const_generic => (2, 1, vec![param(0), param(0)], param(1)),
 
         sym::sve_cast => (2, 0, vec![param(0)], param(1)),
@@ -817,6 +1019,8 @@ pub(crate) fn check_intrinsic_type(
 
         sym::return_address => (0, 0, vec![], Ty::new_imm_ptr(tcx, tcx.types.unit)),
 
+        // A PolyASM instruction states its own signature.
+        _ if polyasm_instruction(tcx, intrinsic_id) => return,
         other => {
             tcx.dcx().emit_err(UnrecognizedIntrinsicFunction { span, name: other });
             return;

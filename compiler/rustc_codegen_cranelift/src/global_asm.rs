@@ -192,6 +192,7 @@ fn codegen_global_asm_inner<'tcx>(
 #[derive(Debug)]
 pub(crate) struct GlobalAsmConfig {
     assembler: PathBuf,
+    is_polyasm: bool,
     target: String,
 }
 
@@ -199,6 +200,7 @@ impl GlobalAsmConfig {
     pub(crate) fn new(sess: &Session) -> Self {
         GlobalAsmConfig {
             assembler: crate::toolchain::get_toolchain_binary(sess, "as"),
+            is_polyasm: crate::driver::polyasm::is_target(sess),
             target: match &sess.opts.target_triple {
                 rustc_target::spec::TargetTuple::TargetTuple(tuple) => tuple.clone(),
                 rustc_target::spec::TargetTuple::TargetJson { path_for_rustdoc, .. } => {
@@ -215,6 +217,9 @@ pub(crate) fn compile_global_asm(
     global_asm_object_file: &Path,
 ) -> Result<(), String> {
     assert!(!global_asm.is_empty());
+    if config.is_polyasm {
+        return Err("global assembly is not representable in PolyASM".to_owned());
+    }
 
     // Remove all LLVM style comments
     let mut global_asm = global_asm

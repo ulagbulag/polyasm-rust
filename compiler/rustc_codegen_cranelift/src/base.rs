@@ -1,7 +1,8 @@
 //! Codegen of a single function
 
 use cranelift_codegen::CodegenError;
-use cranelift_codegen::ir::UserFuncName;
+use cranelift_codegen::ir::{SourceLoc, UserFuncName};
+use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::ModuleError;
 use rustc_ast::InlineAsmOptions;
@@ -10,6 +11,7 @@ use rustc_codegen_ssa::base::is_call_from_compiler_builtins_to_upstream_monomorp
 use rustc_data_structures::profiling::SelfProfilerRef;
 use rustc_errors::DiagCtxtHandle;
 use rustc_index::IndexVec;
+use rustc_middle::mir::interpret::alloc_range;
 use rustc_middle::ty::TypeVisitableExt;
 use rustc_middle::ty::adjustment::PointerCoercion;
 use rustc_middle::ty::consts::ConstExt;
@@ -141,6 +143,25 @@ pub(crate) fn codegen_fn<'tcx>(
             &func,
             &clif_comments,
         );
+    }
+
+    // Lift the cells a frame slot holds into values before the slots
+    // themselves are looked at. The promotion runs by default, and
+    // `CG_CLIF_NO_MEM2REG` leaves the cells in the frame.
+    if std::env::var_os("CG_CLIF_NO_MEM2REG").is_none() {
+        tcx.prof
+            .generic_activity("promote clif stack slot cells")
+            .run(|| staging_mem2reg::run(&mut func, &crate::optimize::mem2reg_options()));
+    }
+
+    // Lift the frame cells MIR left in memory back into values. This runs after
+    // the unoptimised dump so that the pair of `.clif` files is the record of
+    // what the pass removed, and before Cranelift's IR checker so that the
+    // checker reports a wrongly promoted slot here, ahead of the lowered image.
+    if std::env::var_os("CG_CLIF_NO_SLOT_PROMOTE").is_none() {
+        tcx.prof
+            .generic_activity("promote clif stack slots")
+            .run(|| crate::optimize::slot_promote::run(&mut func));
     }
 
     // Verify function
@@ -305,6 +326,9 @@ fn codegen_fn_body(fx: &mut FunctionCx<'_, '_, '_>, start_block: Block) {
     for (bb, bb_data) in fx.mir.basic_blocks.iter_enumerated() {
         let block = fx.get_block(bb);
         fx.bcx.switch_to_block(block);
+        if fx.tcx.sess.is_polyasm_target() {
+            fx.bcx.set_srcloc(SourceLoc::default());
+        }
 
         if !reachable_blocks.contains(bb) {
             // We want to skip this block, because it's not reachable. But we still create
@@ -517,6 +541,14 @@ fn codegen_fn_body(fx: &mut FunctionCx<'_, '_, '_>, start_block: Block) {
                 unwind,
                 call_source: _,
             } => {
+                if fx.tcx.sess.is_polyasm_target() {
+                    let block = u32::try_from(bb.as_usize()).expect("MIR block fits u32");
+                    assert!(
+                        block < 0x7fff_ffff,
+                        "PolyASM call block exceeds source location space"
+                    );
+                    fx.bcx.set_srcloc(SourceLoc::new(0x8000_0000 | block));
+                }
                 fx.tcx.prof.generic_activity("codegen call").run(|| {
                     crate::abi::codegen_terminator_call(
                         fx,
@@ -841,8 +873,8 @@ fn codegen_stmt<'tcx>(fx: &mut FunctionCx<'_, '_, 'tcx>, cur_block: Block, stmt:
                     let value = place.to_cvalue(fx);
                     crate::discriminant::codegen_get_discriminant(fx, lval, value, dest_layout);
                 }
-                Rvalue::Repeat(ref operand, times) => {
-                    let operand = codegen_operand(fx, operand);
+                Rvalue::Repeat(ref element, times) => {
+                    let operand = codegen_operand(fx, element);
                     let times = fx
                         .monomorphize(times)
                         .try_to_target_usize(fx.tcx)
@@ -850,11 +882,37 @@ fn codegen_stmt<'tcx>(fx: &mut FunctionCx<'_, '_, 'tcx>, cur_block: Block, stmt:
                     if operand.layout().size.bytes() == 0 {
                         // Do nothing for ZST's
                     } else if fx.clif_type(operand.layout().ty) == Some(types::I8) {
-                        let times = fx.bcx.ins().iconst(fx.pointer_type, times as i64);
-                        // FIXME use emit_small_memset where possible
                         let addr = lval.to_ptr().get_addr(fx);
                         let val = operand.load_scalar(fx);
-                        fx.bcx.call_memset(fx.target_config, addr, val, times);
+                        if times > 0 && times <= 64 {
+                            let wide = fx.bcx.ins().uextend(types::I64, val);
+                            let spread =
+                                fx.bcx.ins().imul_imm_u(wide, 0x0101_0101_0101_0101_u64 as i64);
+                            let mut written = 0;
+                            while times - written >= 8 {
+                                fx.bcx.ins().store(
+                                    MemFlagsData::new(),
+                                    spread,
+                                    addr,
+                                    written as i32,
+                                );
+                                written += 8;
+                            }
+                            while written < times {
+                                fx.bcx.ins().store(MemFlagsData::new(), val, addr, written as i32);
+                                written += 1;
+                            }
+                        } else {
+                            let times = fx.bcx.ins().iconst(fx.pointer_type, times as i64);
+                            fx.bcx.call_memset(fx.target_config, addr, val, times);
+                        }
+                    } else if let Some((byte, length)) =
+                        filled_repeat(fx, element, operand.layout().size, times)
+                    {
+                        let addr = lval.to_ptr().get_addr(fx);
+                        let byte = fx.bcx.ins().iconst(types::I8, i64::from(byte));
+                        let length = fx.bcx.ins().iconst(fx.pointer_type, length);
+                        fx.bcx.call_memset(fx.target_config, addr, byte, length);
                     } else {
                         let loop_block = fx.bcx.create_block();
                         let loop_block2 = fx.bcx.create_block();
@@ -967,10 +1025,144 @@ fn codegen_stmt<'tcx>(fx: &mut FunctionCx<'_, '_, 'tcx>, cur_block: Block, stmt:
                     count
                 };
 
-                fx.bcx.call_memcpy(fx.target_config, dst, src, bytes);
+                let known = crate::optimize::peephole::maybe_known_iconst(&fx.bcx, bytes)
+                    .and_then(|known| u64::try_from(known).ok());
+                if crate::driver::polyasm::is_target(fx.tcx.sess) {
+                    match known {
+                        Some(8) => {
+                            let signature = Signature {
+                                params: vec![
+                                    AbiParam::new(fx.pointer_type),
+                                    AbiParam::new(fx.pointer_type),
+                                ],
+                                returns: vec![],
+                                call_conv: CallConv::PreserveAll,
+                            };
+                            let function = fx
+                                .module
+                                .declare_function(
+                                    crate::driver::polyasm::MEMORY_COPY8_INTRINSIC,
+                                    Linkage::Import,
+                                    &signature,
+                                )
+                                .unwrap();
+                            let callee = fx.module.declare_func_in_func(function, fx.bcx.func);
+                            fx.bcx.ins().call(callee, &[dst, src]);
+                        }
+                        Some(64) => {
+                            let signature = Signature {
+                                params: vec![
+                                    AbiParam::new(fx.pointer_type),
+                                    AbiParam::new(fx.pointer_type),
+                                ],
+                                returns: vec![],
+                                call_conv: CallConv::PreserveAll,
+                            };
+                            let function = fx
+                                .module
+                                .declare_function(
+                                    crate::driver::polyasm::MEMORY_COPY64_INTRINSIC,
+                                    Linkage::Import,
+                                    &signature,
+                                )
+                                .unwrap();
+                            let callee = fx.module.declare_func_in_func(function, fx.bcx.func);
+                            fx.bcx.ins().call(callee, &[dst, src]);
+                        }
+                        _ => {
+                            fx.bcx.call_memcpy(fx.target_config, dst, src, bytes);
+                        }
+                    }
+                } else {
+                    match known {
+                        Some(known) => fx.bcx.emit_small_memory_copy(
+                            fx.target_config,
+                            dst,
+                            src,
+                            known,
+                            1,
+                            1,
+                            true,
+                            MemFlagsData::new(),
+                        ),
+                        None => fx.bcx.call_memcpy(fx.target_config, dst, src, bytes),
+                    }
+                }
             }
         },
     }
+}
+
+/// How many bytes a repeat has to cover before it is worth one `memset` call.
+///
+/// The same count the byte-sized path spells its inline stores up to, so the
+/// two paths change hands at one number and a small array keeps the shape it
+/// has today. Below it the call sequence is longer than what it replaces.
+const REPEAT_FILL_FLOOR: u64 = 64;
+
+/// Answers the byte and the length one repeat becomes as a fill, where it does.
+///
+/// A repeat becomes one `memset` when its element is a constant every byte of
+/// which is the same byte. Zero is what reaches this in practice:
+/// `[const { None }; N]` over a niche-optimised `Option` is a four-byte zero,
+/// and the generic path writes it as N iterations of one store. The value
+/// answers the byte, with zero special case for zero, so `[0x0101_0101; N]`
+/// reaches the same instruction.
+///
+/// The constant is read off the MIR operand in place of the codegened value,
+/// because an `Option<Box<_>>` const arrives as an allocation this codegen
+/// holds by reference: asking the value what it is would answer a load in
+/// place of a number, and the whole repeat would keep its loop.
+fn filled_repeat<'tcx>(
+    fx: &FunctionCx<'_, '_, 'tcx>,
+    element: &Operand<'tcx>,
+    size: Size,
+    times: u64,
+) -> Option<(u8, i64)> {
+    // PolyASM emits repeat stores through the element-copy path. That path
+    // handles wide and indirect constants directly and leaves `read_scalar`
+    // to scalars, in place of packing an aggregate into a u128.
+    if fx.tcx.sess.is_polyasm_target() {
+        return None;
+    }
+    let length = times.checked_mul(size.bytes())?;
+    if length <= REPEAT_FILL_FLOOR {
+        return None;
+    }
+    // `Scalar::Int` and `read_target_uint` hold at most 128 bits. A repeated
+    // aggregate wider than that must use the ordinary element-copy loop below;
+    // asking `read_scalar` for its full allocation panics in the compiler.
+    if size.bytes() > 16 {
+        return None;
+    }
+    let constant = element.constant()?;
+    let (value, _) = crate::constant::eval_mir_constant(fx, constant);
+    let held = match value {
+        ConstValue::Scalar(rustc_middle::mir::interpret::Scalar::Int(int)) => int,
+        ConstValue::Indirect { alloc_id, offset } => {
+            let allocation = fx.tcx.global_alloc(alloc_id).unwrap_memory();
+            // A range carrying provenance or an uninitialised byte answers
+            // something other than `Int`, and this path takes `Int` alone: a
+            // byte pattern holds plain bytes, while a pointer carries
+            // provenance and every run leaves a padding byte unobserved.
+            match allocation.0.read_scalar(fx, alloc_range(offset, size), false) {
+                Ok(rustc_middle::mir::interpret::Scalar::Int(int)) => int,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    if held.size() != size {
+        return None;
+    }
+    let width = usize::try_from(size.bytes()).ok()?;
+    let spelled = held.to_bits(size).to_le_bytes();
+    let carried = spelled.get(..width)?;
+    let first = *carried.first()?;
+    if carried.iter().any(|byte| *byte != first) {
+        return None;
+    }
+    Some((first, i64::try_from(length).ok()?))
 }
 
 fn codegen_array_len<'tcx>(fx: &mut FunctionCx<'_, '_, 'tcx>, place: CPlace<'tcx>) -> Value {

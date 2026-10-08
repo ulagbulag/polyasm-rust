@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 # tidy-alphabetical-start
 itertools = "0.15"
+polyasm-format = { path = "../../../../contrib/polyasm-format", default-features = false }
 rustc_abi = { path = "../rustc_abi" }
 rustc_ast = { path = "../rustc_ast" }
 rustc_attr_ir = { path = "../rustc_attr_ir" }

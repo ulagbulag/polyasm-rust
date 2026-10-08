@@ -624,6 +624,17 @@ impl<'tcx> CPlace<'tcx> {
                                 to_ptr.offset(fx, b_offset).store(fx, val2, flags);
                                 return;
                             }
+                            // A PolyASM byte vector is one machine value the
+                            // target's own vector unit moves in a single
+                            // instruction. Copying it whole keeps the vector the
+                            // guest asked for.
+                            BackendRepr::SimdVector { .. }
+                                if crate::common::polyasm_byte_vector(fx.tcx, from.layout().ty) =>
+                            {
+                                let val = from.load_scalar(fx);
+                                to_ptr.store(fx, val, flags);
+                                return;
+                            }
                             _ => {}
                         }
 

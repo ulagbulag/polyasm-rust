@@ -21,6 +21,7 @@ rustc_span = { path = "../rustc_span" }
 rustc_structures = { path = "../rustc_structures" }
 rustc_symbol_mangling = { path = "../rustc_symbol_mangling" }
 rustc_target = { path = "../rustc_target" }
+rustc_trait_selection = { path = "../rustc_trait_selection" }
 serde = "1"
 serde_json = "1"
 tracing = "0.1"

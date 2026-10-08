@@ -30,7 +30,7 @@ use rustc_target::spec::{Arch, HasTargetSpec, SanitizerSet, Target};
 use smallvec::SmallVec;
 use tracing::{debug, instrument};
 
-use crate::abi::FnAbiLlvmExt;
+use crate::abi::{Callsite, FnAbiLlvmExt};
 use crate::attributes;
 use crate::common::Funclet;
 use crate::context::{CodegenCx, FullCx, GenericCx, SCx};
@@ -508,7 +508,7 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
             )
         };
         if let Some(fn_abi) = fn_abi {
-            fn_abi.apply_attrs_callsite(self, invoke);
+            fn_abi.apply_attrs_callsite(self, Callsite { instruction: invoke, instance });
         }
         invoke
     }
@@ -1465,6 +1465,36 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         self.call_lifetime_intrinsic("llvm.lifetime.end", ptr, size);
     }
 
+    fn preserve_polyasm_callable(&mut self, function: &'ll Value) {
+        attributes::preserve_polyasm_callable(self.cx, function);
+    }
+
+    fn request_polyasm_call(
+        &mut self,
+        call: &'ll Value,
+        function: &'ll Value,
+        property: &str,
+        architecture: &str,
+    ) {
+        let kind = self.cx.get_md_kind_id("polyasm.request");
+        let property = self.cx.create_metadata(property.as_bytes());
+        let architecture = self.cx.create_metadata(architecture.as_bytes());
+        self.cx.set_metadata_node(call, kind, &[property, architecture]);
+        attributes::preserve_polyasm_callable(self.cx, function);
+        for name in ["alwaysinline", "inlinehint"] {
+            unsafe {
+                let kind = llvm::LLVMGetEnumAttributeKindForName(name.as_ptr().cast(), name.len());
+                llvm::LLVMRemoveCallSiteEnumAttribute(
+                    call,
+                    llvm::AttributePlace::Function.as_uint(),
+                    kind,
+                );
+            }
+        }
+        let no_inline = llvm::AttributeKind::NoInline.create_attr(self.llcx);
+        attributes::apply_to_callsite(call, llvm::AttributePlace::Function, &[no_inline]);
+    }
+
     fn call(
         &mut self,
         llty: &'ll Type,
@@ -1522,7 +1552,10 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         };
 
         if let Some(fn_abi) = fn_abi {
-            fn_abi.apply_attrs_callsite(self, call);
+            fn_abi.apply_attrs_callsite(
+                self,
+                Callsite { instruction: call, instance: callee_instance },
+            );
         }
         call
     }
@@ -1995,7 +2028,7 @@ impl<'a, 'll, 'tcx> Builder<'a, 'll, 'tcx> {
             )
         };
         if let Some(fn_abi) = fn_abi {
-            fn_abi.apply_attrs_callsite(self, callbr);
+            fn_abi.apply_attrs_callsite(self, Callsite { instruction: callbr, instance });
         }
         callbr
     }

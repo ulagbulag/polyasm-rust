@@ -8,7 +8,7 @@ crate-type = ["dylib"]
 
 [dependencies]
 # These have to be in sync with each other
-cranelift-codegen = { version = "0.135.0", default-features = false, features = ["std", "timing", "unwind", "all-native-arch"] }
+cranelift-codegen = { version = "0.135.0", default-features = false, features = ["std", "timing", "unwind", "all-native-arch", "pulley"] }
 cranelift-frontend = { version = "0.135.0" }
 cranelift-module = { version = "0.135.0" }
 cranelift-native = { version = "0.135.0" }
@@ -17,6 +17,12 @@ cranelift-object = { version = "0.135.0", default-features = false }
 target-lexicon = "0.13"
 gimli = { version = "0.33", default-features = false, features = ["write"] }
 object = { version = "0.39.1", default-features = false, features = ["std", "read_core", "write", "archive", "coff", "elf", "macho", "pe"] }
+clap = { version = "4.6", default-features = false, features = ["std"] }
+polyasm = { path = "../../../../contrib/polyasm" }
+polyasm-format = { path = "../../../../contrib/polyasm-format", features = ["clap"] }
+polytime-core = { path = "../../../../contrib/polytime-core" }
+polytime-frontend-cranelift = { path = "../../../../contrib/polytime-frontend-cranelift", default-features = false, features = ["hosted"] }
+staging-mem2reg = { path = "../../../../contrib/staging-mem2reg" }
 
 indexmap = "2.0.0"
 libloading = { version = "0.9.0", optional = true }

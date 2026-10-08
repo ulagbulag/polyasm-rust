@@ -118,6 +118,10 @@ pub(super) fn flags_env(
     }
 }
 
+pub(super) fn should_prefer_dynamic(mode: Mode, target: TargetSelection) -> bool {
+    !target.is_polyasm() && mode == Mode::Std
+}
+
 /// Flags that are passed to the `rustc` shim binary. These flags will only be applied when
 /// compiling host code, i.e. when `--target` is unset.
 #[derive(Debug, Default)]
@@ -1134,8 +1138,12 @@ impl Builder<'_> {
             // Any library crate that's part of the sysroot should be marked unstable
             // (including third-party dependencies), unless it uses a staged_api
             // `#![stable(..)]` attribute to explicitly mark itself stable.
+            //
+            // The wrapper reads the source root it is handed here, so a path
+            // dependency from outside the tree (the PolyASM workspace crates a
+            // codegen backend links) builds as its own workspace builds it.
             Mode::Std | Mode::Codegen | Mode::Rustc => {
-                cargo.env("RUSTC_FORCE_UNSTABLE", "1");
+                cargo.env("RUSTC_FORCE_UNSTABLE", &self.src);
             }
 
             // For everything else, crate stability shouldn't matter, so don't set a flag.
@@ -1438,8 +1446,9 @@ impl Builder<'_> {
 
         // When we build Rust dylibs they're all intended for intermediate
         // usage, so make sure we pass the -Cprefer-dynamic flag instead of
-        // linking all deps statically into the dylib.
-        if matches!(mode, Mode::Std) {
+        // linking all deps statically into the dylib. PolyASM links statically
+        // alone, so its standard library stays statically linked.
+        if should_prefer_dynamic(mode, target) {
             rustflags.arg("-Cprefer-dynamic");
         }
 

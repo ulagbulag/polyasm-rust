@@ -23,6 +23,7 @@ mod mips;
 mod mips64;
 mod msp430;
 mod nvptx64;
+mod polyasm;
 mod powerpc;
 mod powerpc64;
 mod riscv;
@@ -797,6 +798,7 @@ impl<'a, Ty> FnAbi<'a, Ty> {
             Arch::Hexagon => hexagon::compute_abi_info(cx, self),
             Arch::Xtensa => xtensa::compute_abi_info(cx, self),
             Arch::RiscV32 | Arch::RiscV64 => riscv::compute_abi_info(cx, self),
+            Arch::Polyasm => polyasm::compute_abi_info(cx, self),
             Arch::Wasm32 | Arch::Wasm64 => wasm::compute_abi_info(cx, self),
             Arch::Bpf => bpf::compute_abi_info(cx, self),
             arch @ (Arch::SpirV | Arch::Other(_)) => {

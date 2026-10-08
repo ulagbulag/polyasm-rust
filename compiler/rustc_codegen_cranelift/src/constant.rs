@@ -7,7 +7,7 @@ use rustc_const_eval::interpret::CTFE_ALLOC_SALT;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::interpret::{
-    AllocId, GlobalAlloc, PointerArithmetic, Scalar, read_target_uint,
+    AllocId, GlobalAlloc, PointerArithmetic, Scalar, alloc_range, read_target_uint,
 };
 use rustc_middle::ty::{ExistentialTraitRef, ScalarInt};
 
@@ -216,11 +216,63 @@ pub(crate) fn codegen_const_value<'tcx>(
                 CValue::by_val(val, layout)
             }
         },
-        ConstValue::Indirect { alloc_id, offset } => CValue::by_ref(
-            Pointer::new(pointer_for_allocation(fx, alloc_id))
-                .offset_i64(fx, i64::try_from(offset.bytes()).unwrap()),
-            layout,
-        ),
+        ConstValue::Indirect { alloc_id, offset } => {
+            let alloc = fx.tcx.global_alloc(alloc_id).unwrap_memory();
+            if let BackendRepr::ScalarPair { a, b, b_offset } = layout.backend_repr
+                && matches!(a.primitive(), rustc_abi::Primitive::Pointer(_))
+                && matches!(b.primitive(), rustc_abi::Primitive::Int(..))
+                && b.size(fx).bytes() <= 8
+                && offset
+                    .bytes()
+                    .checked_add(a.size(fx).bytes())
+                    .is_some_and(|end| end <= alloc.0.len() as u64)
+                && offset
+                    .bytes()
+                    .checked_add(b_offset.bytes())
+                    .and_then(|start| start.checked_add(b.size(fx).bytes()))
+                    .is_some_and(|end| end <= alloc.0.len() as u64)
+            {
+                let pointer = alloc.0.read_scalar(fx, alloc_range(offset, a.size(fx)), true);
+                let metadata =
+                    alloc.0.read_scalar(fx, alloc_range(offset + b_offset, b.size(fx)), false);
+                if let (Ok(pointer @ Scalar::Ptr(..)), Ok(Scalar::Int(metadata))) =
+                    (pointer, metadata)
+                {
+                    let pointer =
+                        codegen_const_value(fx, ConstValue::Scalar(pointer), ty).load_scalar(fx);
+                    let raw_metadata = metadata.size().truncate(metadata.to_bits(metadata.size()));
+                    let metadata =
+                        fx.bcx.ins().iconst(scalar_to_clif_type(fx.tcx, b), raw_metadata as i64);
+                    return CValue::by_val_pair(pointer, metadata, layout);
+                }
+            }
+            // A pair or a scalar whose bytes the allocation already states
+            // reads as an `iconst` here in place of a load at a gain of
+            // 32 -> 25 instructions per element on the 1000-x cases, and the
+            // fold stays out for a placement reason.
+            //
+            // `contrib/demo-guest-yield`'s `copy_4kib_1000x` reads a
+            // `const SRC: &[u8]` of 4096 bytes -- an object in the image's own
+            // data -- into a 4096-byte array on the guest stack. Intel's 4K
+            // partial alias is a property of the low twelve bits of the two
+            // addresses, so what that bulk move costs is
+            // `(src - dst) mod 4096`. The stack side is the host's and fixed;
+            // the image side is wherever `polytime_core::portable::link`'s
+            // data cursor reached, and the cursor is the sum of every object
+            // placed before it. So the *size of the image* sets the aliasing
+            // distance of a copy, and every pass in this compiler that changes
+            // how many bytes an object takes moves it: folding both shapes
+            // takes `copy-4-kib-1000-x` from 60.104 to 110.44 us with fewer
+            // instructions retired.
+            //
+            // The fold belongs here when placement follows something other
+            // than a running total.
+            CValue::by_ref(
+                Pointer::new(pointer_for_allocation(fx, alloc_id))
+                    .offset_i64(fx, i64::try_from(offset.bytes()).unwrap()),
+                layout,
+            )
+        }
         ConstValue::Slice { alloc_id, meta } => {
             let ptr = pointer_for_allocation(fx, alloc_id);
             let len = fx.bcx.ins().iconst(fx.pointer_type, meta as i64);

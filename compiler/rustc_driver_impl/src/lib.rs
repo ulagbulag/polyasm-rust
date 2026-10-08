@@ -213,6 +213,21 @@ pub fn compiler_entrypoint(at_args: &[String], callbacks: &mut (dyn Callbacks + 
     let has_input = input.is_some();
     let (odir, ofile) = make_output(&matches);
 
+    // A width-unfixed PolyASM crate compiles at its other pointer width in a
+    // companion `rustc` beside this session; the guard ends the companion
+    // with the session wherever the session ends first.
+    let out_dir = odir.clone().unwrap_or_else(|| match &ofile {
+        Some(OutFileName::Real(path)) => path.parent().map(Path::to_path_buf).unwrap_or_default(),
+        _ => PathBuf::new(),
+    });
+    let _companion = rustc_session::polyasm::start(
+        &default_early_dcx,
+        &args,
+        &sopts,
+        matches!(input, Some(Input::File(_))),
+        &out_dir,
+    );
+
     drop(default_early_dcx);
 
     let mut config = interface::Config {
@@ -350,6 +365,10 @@ pub fn compiler_entrypoint(at_args: &[String], callbacks: &mut (dyn Callbacks + 
         if let (Some(linker), incr_comp_session) = linker {
             linker.link(sess, incr_comp_session, codegen_backend);
         }
+
+        // Every output of a width-unfixed PolyASM crate stands at both widths
+        // when this process ends.
+        rustc_session::polyasm::join(sess);
     })
 }
 

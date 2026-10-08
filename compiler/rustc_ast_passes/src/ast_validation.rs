@@ -1609,7 +1609,12 @@ impl Visitor<'_> for AstValidator<'_> {
                     // For why we reject `const auto trait`, see rust-lang/rust#149285.
                     self.deny_const_auto_traits(*constness);
                     // Auto traits cannot have generics, super traits nor contain items.
-                    self.deny_generic_params(generics, ident.span);
+                    let compiler_owned_polyasm_always = self.sess.is_polyasm_target()
+                        && attr::first_attr_value_str_by_name(&item.attrs, sym::lang)
+                            == Some(sym::polyasm_always);
+                    if !compiler_owned_polyasm_always {
+                        self.deny_generic_params(generics, ident.span);
+                    }
                     self.deny_super_traits(bounds, ident.span);
                     self.deny_where_clause(&generics.where_clause, ident.span);
                     self.deny_items(items, ident.span);

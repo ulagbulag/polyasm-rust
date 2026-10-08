@@ -373,6 +373,21 @@ language_item_table! {
 
     Tuple,                   sym::tuple_trait,         tuple_trait,                Target::Trait,          GenericRequirement::Exact(0);
 
+    // Compiler-derived PolyASM markers. These are target-owned marker traits,
+    // analogous to `Send` and `Sync`, with zero methods.
+    PolyasmAlways,           sym::polyasm_always,      polyasm_always_trait,       Target::Trait, GenericRequirement::Exact(2);
+    PolyasmCompilerCertificate, sym::polyasm_compiler_certificate, polyasm_compiler_certificate_trait, Target::Trait, GenericRequirement::Exact(2);
+    PolyasmCompilerCounterexample,
+        sym::polyasm_compiler_counterexample,
+        polyasm_compiler_counterexample_trait,
+        Target::Trait,
+        GenericRequirement::Exact(2);
+    PolyasmCompilerStaticClockCertificate,
+        sym::polyasm_compiler_static_clock_certificate,
+        polyasm_compiler_static_clock_certificate_trait,
+        Target::Trait,
+        GenericRequirement::Exact(2);
+
     SliceLen,                sym::slice_len_fn,        slice_len_fn,               Target::Method(MethodKind::Inherent), GenericRequirement::None;
 
     // Language items from AST lowering

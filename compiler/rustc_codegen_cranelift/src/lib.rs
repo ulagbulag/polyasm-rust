@@ -20,10 +20,10 @@ extern crate rustc_errors;
 extern crate rustc_hir;
 extern crate rustc_index;
 extern crate rustc_log;
+extern crate rustc_metadata;
 extern crate rustc_middle;
 extern crate rustc_session;
 extern crate rustc_span;
-#[cfg(feature = "jit")]
 extern crate rustc_structures;
 extern crate rustc_symbol_mangling;
 extern crate rustc_target;
@@ -33,15 +33,17 @@ extern crate rustc_target;
 extern crate rustc_driver;
 
 use std::any::Any;
-use std::env;
 use std::sync::Arc;
 
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
+use rustc_codegen_ssa::back::archive::ArArchiveBuilderBuilder;
+use rustc_codegen_ssa::back::link::link_binary;
 use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_codegen_ssa::{CompiledModules, CrateInfo, TargetConfig, back};
 use rustc_data_structures::unord::UnordSet;
 use rustc_log::tracing::info;
+use rustc_metadata::EncodedMetadata;
 use rustc_middle::dep_graph::WorkProductMap;
 use rustc_session::config::{NATIVE_CPU, OutputFilenames};
 use rustc_session::{CodegenBackendInit, EarlySession, IncrCompSession, Session};
@@ -123,13 +125,35 @@ pub struct CraneliftCodegenBackend {
     pub config: Option<BackendConfig>,
 }
 
+enum OngoingCodegen {
+    Aot(rustc_codegen_ssa::back::write::OngoingCodegen<driver::aot::AotDriver>),
+    Polyasm(Box<driver::polyasm::OngoingCodegen>),
+}
+
 impl CodegenBackend for CraneliftCodegenBackend {
     fn name(&self) -> &'static str {
         "cranelift"
     }
 
     fn init(&mut self, sess: &EarlySession) -> CodegenBackendInit {
-        use rustc_session::config::{InstrumentCoverage, LtoCli};
+        use rustc_session::config::{InstrumentCoverage, LtoCli, OutputType};
+
+        if !driver::polyasm::is_target(sess)
+            && let Some(output_type) = sess.opts.output_types.keys().copied().find(|output_type| {
+                matches!(
+                    output_type,
+                    OutputType::Assembly
+                        | OutputType::Bitcode
+                        | OutputType::LlvmAssembly
+                        | OutputType::ThinLinkBitcode
+                )
+            })
+        {
+            sess.dcx().fatal(format!(
+                "`--emit={}` is not supported by rustc_codegen_cranelift",
+                output_type.shorthand()
+            ));
+        }
 
         match (sess.target.requires_lto, sess.early_lto()) {
             (true, _) | (false, LtoCli::Yes | LtoCli::Fat | LtoCli::NoParam | LtoCli::Thin) => {
@@ -182,10 +206,11 @@ impl CodegenBackend for CraneliftCodegenBackend {
         // FIXME(f16_f128): `rustc_codegen_llvm` currently disables support on Windows GNU
         // targets due to GCC using a different ABI than LLVM. Therefore `f16` and `f128`
         // won't be available when using a LLVM-built sysroot.
-        let has_reliable_f16_f128 = !(sess.target.arch == Arch::X86_64
-            && sess.target.os == Os::Windows
-            && sess.target.env == Env::Gnu
-            && sess.target.cfg_abi != CfgAbi::Llvm);
+        let has_reliable_f16_f128 = !driver::polyasm::is_target(sess)
+            && !(sess.target.arch == Arch::X86_64
+                && sess.target.os == Os::Windows
+                && sess.target.env == Env::Gnu
+                && sess.target.cfg_abi != CfgAbi::Llvm);
 
         // FIXME(f128): f128 math operations need f128 math symbols, which currently aren't always
         // filled in by compiler-builtins. The only libc that provides these currently is glibc.
@@ -209,7 +234,7 @@ impl CodegenBackend for CraneliftCodegenBackend {
 
     fn has_mnemonic(&self, sess: &Session, mnemonic: &str) -> bool {
         // All Cranelift supported targets support ret except for s390x
-        mnemonic == "ret" && sess.target.arch != Arch::S390x
+        !driver::polyasm::is_target(sess) && mnemonic == "ret" && sess.target.arch != Arch::S390x
     }
 
     fn target_cpu(&self, sess: &Session) -> String {
@@ -223,6 +248,9 @@ impl CodegenBackend for CraneliftCodegenBackend {
 
     fn codegen_crate(&self, tcx: TyCtxt<'_>) -> Box<dyn Any> {
         info!("codegen crate {}", tcx.crate_name(LOCAL_CRATE));
+        if driver::polyasm::is_target(tcx.sess) {
+            return Box::new(OngoingCodegen::Polyasm(driver::polyasm::run(tcx)));
+        }
         let config = self.config.as_ref().unwrap();
         if config.jit_mode {
             #[cfg(feature = "jit")]
@@ -231,7 +259,10 @@ impl CodegenBackend for CraneliftCodegenBackend {
             #[cfg(not(feature = "jit"))]
             tcx.dcx().fatal("jit support was disabled when compiling rustc_codegen_cranelift");
         } else {
-            Box::new(rustc_codegen_ssa::base::codegen_crate(driver::aot::AotDriver, tcx))
+            Box::new(OngoingCodegen::Aot(rustc_codegen_ssa::base::codegen_crate(
+                driver::aot::AotDriver,
+                tcx,
+            )))
         }
     }
 
@@ -240,27 +271,54 @@ impl CodegenBackend for CraneliftCodegenBackend {
         ongoing_codegen: Box<dyn Any>,
         sess: &Session,
         incr_comp_session: Option<&IncrCompSession>,
-        _outputs: &OutputFilenames,
+        outputs: &OutputFilenames,
         crate_info: &CrateInfo,
     ) -> (CompiledModules, WorkProductMap) {
-        ongoing_codegen
-            .downcast::<rustc_codegen_ssa::back::write::OngoingCodegen<driver::aot::AotDriver>>()
-            .unwrap()
-            .join(sess, incr_comp_session, crate_info)
+        match *ongoing_codegen.downcast::<OngoingCodegen>().unwrap() {
+            OngoingCodegen::Aot(codegen) => codegen.join(sess, incr_comp_session, crate_info),
+            OngoingCodegen::Polyasm(codegen) => codegen.join(sess, outputs),
+        }
+    }
+
+    fn link(
+        &self,
+        sess: &Session,
+        compiled_modules: CompiledModules,
+        crate_info: CrateInfo,
+        metadata: EncodedMetadata,
+        outputs: &OutputFilenames,
+    ) {
+        if driver::polyasm::is_target(sess) {
+            driver::polyasm::publish(sess, compiled_modules, crate_info, metadata, outputs);
+        } else {
+            link_binary(
+                sess,
+                &ArArchiveBuilderBuilder,
+                compiled_modules,
+                crate_info,
+                metadata,
+                outputs,
+                self.name(),
+            );
+        }
     }
 }
 
 /// Determine if the Cranelift ir verifier should run.
 ///
-/// Returns true when `-Zverify-llvm-ir` is passed, the `CG_CLIF_ENABLE_VERIFIER` env var is set to
-/// 1 or when cg_clif is compiled with debug assertions enabled or false otherwise.
+/// Answers whether the IR checker runs: on the LLVM IR check flag of the
+/// session, on the check build option, or in a cg_clif build with debug
+/// assertions.
 fn enable_verifier(sess: &Session) -> bool {
-    sess.verify_llvm_ir()
-        || cfg!(debug_assertions)
-        || env::var("CG_CLIF_ENABLE_VERIFIER").as_deref() == Ok("1")
+    sess.verify_llvm_ir() || cfg!(debug_assertions) || crate::config::build_options().ir_checks
 }
 
 fn target_tuple(sess: &Session) -> target_lexicon::Triple {
+    if driver::polyasm::is_target(sess) {
+        return driver::polyasm::interchange_triple(sess)
+            .parse()
+            .expect("the built-in interchange target triple must parse");
+    }
     // Use versioned target tuple to make `OperatingSystem::MacOSX(...)`
     // contain a value, which we use when emitting `LC_BUILD_VERSION`.
     match back::versioned_llvm_target(sess).parse() {
@@ -344,6 +402,9 @@ fn build_isa(sess: &Session, jit: bool) -> Arc<dyn TargetIsa + 'static> {
     let flags = settings::Flags::new(flags_builder);
 
     let isa_builder = match sess.opts.cg.target_cpu.as_deref() {
+        Some(NATIVE_CPU) if driver::polyasm::is_target(sess) => {
+            sess.dcx().fatal("`-Ctarget-cpu=native` is not supported for PolyASM targets")
+        }
         Some(NATIVE_CPU) => cranelift_native::builder_with_options(true).unwrap(),
         Some(value) => {
             let mut builder =

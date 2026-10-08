@@ -70,6 +70,23 @@ fn enforce_trait_manually_implementable(
         .emit();
     }
 
+    if !trait_def_id.is_local()
+        && matches!(
+            tcx.as_lang_item(trait_def_id),
+            Some(
+                LangItem::PolyasmAlways
+                    | LangItem::PolyasmCompilerCertificate
+                    | LangItem::PolyasmCompilerCounterexample
+                    | LangItem::PolyasmCompilerStaticClockCertificate
+            )
+        )
+    {
+        return Err(tcx.dcx().span_err(
+            impl_header_span,
+            "explicit downstream impls for the compiler-derived PolyASM witness traits are not permitted",
+        ));
+    }
+
     // Disallow *all* explicit impls of traits marked `#[rustc_deny_explicit_impl]`
     if trait_def.deny_explicit_impl {
         let trait_name = tcx.item_name(trait_def_id);

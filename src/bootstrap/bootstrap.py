@@ -1223,25 +1223,10 @@ class RustBuild(object):
         return os.path.isdir(os.path.join(repo_path, ".git"))
 
     def get_latest_commit(self):
-        repo_path = self.rust_root
-        author_email = self.stage0_data.get("git_merge_commit_email")
-        if not self.is_git_repository(repo_path):
-            return "<commit>"
-        cmd = [
-            "git",
-            "rev-list",
-            "--author",
-            author_email,
-            "-n1",
-            "HEAD",
-        ]
-        try:
-            commit = subprocess.check_output(
-                cmd, universal_newlines=True, cwd=repo_path
-            ).strip()
-            return commit or "<commit>"
-        except subprocess.CalledProcessError:
-            return "<commit>"
+        # PolyASM's source policy prohibits invoking Git, including read-only
+        # revision discovery. Bootstrap therefore uses the same deterministic
+        # placeholder as a distributed source tree.
+        return "<commit>"
 
     def check_vendored_status(self):
         """Check that vendoring is configured properly"""

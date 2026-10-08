@@ -3,11 +3,19 @@
 use super::{from_raw_parts, memchr};
 use crate::ascii;
 use crate::cmp::{self, BytewiseEq, Ordering};
+#[cfg(not(target_abi = "polyasm"))]
 use crate::intrinsics::compare_bytes;
 use crate::marker::Destruct;
 use crate::mem::{SizedTypeProperties, transmute_copy};
 use crate::num::NonZero;
 use crate::ops::ControlFlow;
+// On PolyASM the comparison of two counted runs is one instruction and is
+// named as one: the intrinsic reaches a producer that imports zero host
+// comparisons, which writes a byte loop out as a body and hands the guest
+// a call to it. Only the sign of the answer is read below, which is the whole
+// of what the instruction promises.
+#[cfg(target_abi = "polyasm")]
+use crate::polyasm::intrinsics::memory_compare as compare_bytes;
 
 #[stable(feature = "rust1", since = "1.0.0")]
 #[rustc_const_unstable(feature = "const_cmp", issue = "143800")]

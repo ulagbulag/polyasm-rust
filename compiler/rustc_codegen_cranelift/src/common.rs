@@ -46,7 +46,7 @@ pub(crate) fn scalar_to_clif_type(tcx: TyCtxt<'_>, scalar: Scalar) -> Type {
     }
 }
 
-fn clif_type_from_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<types::Type> {
+pub(crate) fn clif_type_from_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<types::Type> {
     Some(match ty.kind() {
         ty::Bool => types::I8,
         ty::Uint(size) => match size {
@@ -232,6 +232,20 @@ pub(crate) fn type_sign(ty: Ty<'_>) -> bool {
         ty::Float(..) => false, // `signed` is unused for floats
         _ => panic!("{}", ty),
     }
+}
+
+/// Answers whether PolyASM names a whole-vector instruction for `ty`.
+///
+/// PolyASM's executable ISA publishes byte vectors alone, and only
+/// the sixteen-byte width survives Cranelift's own interchange selection. Every
+/// other lane shape keeps the portable per-lane spelling, which is a correct
+/// answer on every target in place of a selection outside this one's reach.
+pub(crate) fn polyasm_byte_vector<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    if !ty.is_simd() || !crate::driver::polyasm::is_target(tcx.sess) {
+        return false;
+    }
+    let (lane_count, lane_ty) = ty.simd_size_and_type(tcx);
+    lane_count == 16 && matches!(lane_ty.kind(), ty::Int(ty::IntTy::I8) | ty::Uint(ty::UintTy::U8))
 }
 
 pub(crate) fn create_wrapper_function(

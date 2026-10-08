@@ -4,8 +4,9 @@ use std::process::{self, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{env, fs, io};
 
+use cg_clif_build_system::rustflags_to_cmd_env;
+
 use crate::path::{Dirs, RelPath};
-use crate::shared_utils::rustflags_to_cmd_env;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Compiler {

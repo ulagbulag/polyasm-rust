@@ -1280,6 +1280,7 @@ pub(super) fn emit_va_arg<'ll, 'tcx>(
         ),
 
         Arch::Bpf => bug!("bpf does not support c-variadic functions"),
+        Arch::Polyasm => bug!("polyasm does not support c-variadic functions"),
         Arch::SpirV => bug!("spirv does not support c-variadic functions"),
 
         Arch::Avr | Arch::M68k | Arch::Msp430 => {

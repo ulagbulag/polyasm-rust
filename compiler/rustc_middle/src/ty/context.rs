@@ -13,7 +13,7 @@ use std::hash::{Hash, Hasher};
 use std::marker::PointeeSized;
 use std::ops::Deref;
 use std::sync::{Arc, OnceLock};
-use std::{debug_assert_matches, fmt, iter, mem};
+use std::{debug_assert_matches, fmt, fs, iter, mem};
 
 use rustc_abi::{ExternAbi, FieldIdx, Layout, LayoutData, TargetDataLayout, VariantIdx};
 use rustc_ast as ast;
@@ -86,6 +86,10 @@ impl<'tcx> rustc_type_ir::inherent::DefId<TyCtxt<'tcx>> for DefId {
     fn as_local(self) -> Option<LocalDefId> {
         self.as_local()
     }
+}
+
+fn canonical_path(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    fs::canonicalize(path).ok()
 }
 
 impl<'tcx> rustc_type_ir::inherent::Safety<TyCtxt<'tcx>> for hir::Safety {
@@ -930,6 +934,112 @@ impl<'tcx> TyCtxt<'tcx> {
 
     pub fn is_sizedness_trait(self, def_id: DefId) -> bool {
         matches!(self.as_lang_item(def_id), Some(LangItem::Sized | LangItem::MetaSized))
+    }
+
+    /// Whether `krate` is a compiler-identified crate in the PolyASM sysroot.
+    ///
+    /// Names, staged API attributes, lang items, and compiler-builtins
+    /// attributes are all user-selectable on nightly, so each is an authority
+    /// boundary only together with the source. First require the crate source to be the canonical
+    /// source or artifact selected from this session's sysroot, then use the
+    /// compiler-recognized marker to distinguish the three permitted crates.
+    pub fn is_polyasm_sysroot_crate(self, krate: CrateNum) -> bool {
+        self.is_polyasm_sysroot_definition(krate)
+            && self.has_polyasm_sysroot_provenance(krate, self.crate_name(krate))
+    }
+
+    /// Whether `name` is one of the six explicitly ordered byte conversions.
+    ///
+    /// LANG rule 27 admits a byte reinterpretation only when the program names
+    /// little or big endian, so these six are the entire trusted vocabulary:
+    /// the four byte-array conversions of the integers and floats, and
+    /// `core::polyasm`'s two ordered reinterpretations of one value as another.
+    pub fn is_polyasm_explicit_endian_name(self, name: Symbol) -> bool {
+        matches!(
+            name.as_str(),
+            "from_be_bytes"
+                | "from_le_bytes"
+                | "to_be_bytes"
+                | "to_le_bytes"
+                | "little_endian_transmute"
+                | "big_endian_transmute"
+        )
+    }
+
+    /// Whether `def_id` is the sysroot's explicitly ordered byte conversion.
+    ///
+    /// The `Always` marker relies on this call boundary in place of the
+    /// native-endian transmute inside the helper, so MIR inlining keeps the
+    /// call and one body answers the same on every optimization profile.
+    pub fn is_polyasm_explicit_endian_helper(self, def_id: DefId) -> bool {
+        self.is_polyasm_sysroot_crate(def_id.krate)
+            && self
+                .opt_item_name(def_id)
+                .is_some_and(|name| self.is_polyasm_explicit_endian_name(name))
+    }
+
+    /// Recognizes a sysroot crate by the lang items only it defines.
+    ///
+    /// Bootstrap compiles `alloc` against a `core` that stays outside the
+    /// target library directory at that point, so its artifact path stays
+    /// open there; `Sized`, `Box` and the compiler builtins stay with the
+    /// sysroot, out of every guest crate's reach.
+    pub fn is_polyasm_sysroot_definition(self, krate: CrateNum) -> bool {
+        if !self.sess.is_polyasm_target() {
+            return false;
+        }
+        match self.crate_name(krate) {
+            sym::alloc => self.lang_items().owned_box().is_some_and(|item| item.krate == krate),
+            sym::core => self.lang_items().sized_trait().is_some_and(|item| item.krate == krate),
+            sym::compiler_builtins => self.is_compiler_builtins(krate),
+            _ => false,
+        }
+    }
+
+    fn has_polyasm_sysroot_provenance(self, krate: CrateNum, name: Symbol) -> bool {
+        if krate == LOCAL_CRATE {
+            let relative_source = match name {
+                sym::alloc => "library/alloc/src/lib.rs",
+                sym::compiler_builtins => "library/compiler-builtins/compiler-builtins/src/lib.rs",
+                sym::core => "library/core/src/lib.rs",
+                _ => return false,
+            };
+            let Some(actual_source) = self.sess.local_crate_source_file() else {
+                return false;
+            };
+            let Some(actual_source) = actual_source.local_path() else {
+                return false;
+            };
+            let source_base = self
+                .sess
+                .opts
+                .real_rust_source_base_dir
+                .clone()
+                .unwrap_or_else(|| self.sess.opts.sysroot.path().join("lib/rustlib/src/rust"));
+            let expected_source = source_base.join(relative_source);
+            if actual_source == expected_source {
+                return true;
+            }
+            return canonical_path(actual_source)
+                .zip(canonical_path(&expected_source))
+                .is_some_and(|(actual, expected)| actual == expected);
+        }
+
+        let target_lib = rustc_session::filesearch::make_target_lib_path(
+            self.sess.opts.sysroot.path(),
+            self.sess.opts.target_triple.tuple(),
+        );
+        let Some(target_lib) = canonical_path(&target_lib) else {
+            return false;
+        };
+        let source = self.used_crate_source(krate);
+        let mut paths = source.paths();
+        let Some(first) = paths.next() else {
+            return false;
+        };
+        std::iter::once(first).chain(paths).all(|path| {
+            canonical_path(path).is_some_and(|path| path.parent() == Some(target_lib.as_path()))
+        })
     }
 
     pub fn lift<T: Lift<TyCtxt<'tcx>>>(self, value: T) -> T::Lifted {

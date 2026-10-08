@@ -30,6 +30,23 @@ pub(super) fn provide(providers: &mut Providers) {
     providers.mir_shims = |tcx, shim| tcx.arena.alloc(make_shim(tcx, shim));
 }
 
+/// Builds the MIR body of a shim.
+///
+/// Synchronous drop glue leaves this function through `run_optimization_passes`,
+/// because `inline::Inline` lives only there and a drop shim that calls another
+/// drop shim otherwise keeps the call however cheap the callee is: dropping a
+/// `Box<[T]>` stays four nested calls, the innermost of them a thousand-iteration
+/// loop over an element type with a trivial destructor, and `-Zmir-opt-level` stays
+/// outside all of it. LLVM folds those shims with its own inliner after codegen
+/// and Cranelift has zero inliners after it, so that asymmetry is time.
+///
+/// Every other shim kind stays off that exit. `Inline` asks `optimized_mir` of a
+/// local callee, that asks `mir_callgraph_cyclic`, and that walks back through
+/// `mir_inliner_callees`, which reads a shim's body with `instance_mir` — so a shim
+/// whose body the inliner touches is a `mir_shims` query that depends on itself.
+/// `inline::cycle::should_recurse` names the shim kinds that walk is allowed to
+/// enter, and every call shim is one of them; only the drop glue arm is guarded
+/// there, by `has_param`.
 fn make_shim<'tcx>(tcx: TyCtxt<'tcx>, shim: ty::ShimKind<'tcx>) -> Body<'tcx> {
     debug!("make_shim({:?})", shim);
 
@@ -184,6 +201,12 @@ fn make_shim<'tcx>(tcx: TyCtxt<'tcx>, shim: ty::ShimKind<'tcx>) -> Body<'tcx> {
     // only valid in a `PostAnalysis` param-env. However, since we do initial
     // validation with the MirBuilt phase, which uses a user-facing param-env.
     // This causes validation errors when TAITs are involved.
+    let optimize = matches!(shim, ty::ShimKind::DropGlue(..));
+    let phase = match optimize {
+        true => MirPhase::Runtime(RuntimePhase::PostCleanup),
+        false => MirPhase::Runtime(RuntimePhase::Optimized),
+    };
+
     pm::run_passes_no_validate(
         tcx,
         &mut result,
@@ -198,8 +221,12 @@ fn make_shim<'tcx>(tcx: TyCtxt<'tcx>, shim: ty::ShimKind<'tcx>) -> Body<'tcx> {
             &abort_unwinding_calls::AbortUnwindingCalls,
             &add_call_guards::CriticalCallEdges,
         ],
-        Some(MirPhase::Runtime(RuntimePhase::Optimized)),
+        Some(phase),
     );
+
+    if optimize {
+        run_optimization_passes(tcx, &mut result);
+    }
 
     debug!("make_shim({:?}) = {:?}", shim, result);
 

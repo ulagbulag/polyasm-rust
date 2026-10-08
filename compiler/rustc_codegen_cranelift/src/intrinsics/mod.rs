@@ -15,11 +15,13 @@ macro_rules! intrinsic_args {
 mod llvm;
 mod llvm_aarch64;
 mod llvm_x86;
+mod packet;
 mod simd;
 
 use cranelift_codegen::ir::{
     AtomicRmwOp, BlockArg, ExceptionTableData, ExceptionTableItem, ExceptionTag,
 };
+use cranelift_codegen::isa::CallConv;
 use rustc_middle::ty;
 use rustc_middle::ty::GenericArgsRef;
 use rustc_middle::ty::layout::ValidityRequirement;
@@ -285,6 +287,19 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
     }
 
     let intrinsic = fx.tcx.item_name(instance.def_id());
+    if packet::codegen(packet::Call { fx, instance, intrinsic, args, destination }) {
+        let ret_block = fx.get_block(target.expect("target for packet intrinsic"));
+        fx.bcx.ins().jump(ret_block, &[]);
+        return Ok(());
+    }
+    if crate::driver::polyasm::is_target(fx.tcx.sess)
+        && rustc_codegen_ssa::polyasm::instruction(fx.tcx, instance.def_id())
+    {
+        polyasm_instruction(fx, instance, intrinsic, args, destination);
+        let ret_block = fx.get_block(target.expect("target for PolyASM instruction"));
+        fx.bcx.ins().jump(ret_block, &[]);
+        return Ok(());
+    }
     let instance_args = instance.args;
 
     if intrinsic.as_str().starts_with("simd_") {
@@ -297,7 +312,10 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
             target.expect("target for simd intrinsic"),
             source_info.span,
         );
-    } else if codegen_float_intrinsic_call(fx, intrinsic, args, destination) {
+    } else if !(crate::driver::polyasm::is_target(fx.tcx.sess)
+        && !fx.tcx.intrinsic(instance.def_id()).unwrap().must_be_overridden)
+        && codegen_float_intrinsic_call(fx, intrinsic, args, destination)
+    {
         let ret_block = fx.get_block(target.expect("target for float intrinsic"));
         fx.bcx.ins().jump(ret_block, &[]);
     } else {
@@ -313,6 +331,83 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
         )?;
     }
     Ok(())
+}
+
+/// Lowers one PolyASM instruction (`core::polyasm::intrinsics`).
+///
+/// The counted runs reach Cranelift's own run calls, which the PolyASM driver
+/// reads as their rows. Every other instruction is one call of the symbol its
+/// name spells over exactly the operands it declares; an instruction whose
+/// intrinsic carries a body appends that body's symbol after a `.`, and the
+/// driver writes the row with that body as its record: the portable answer a
+/// machine enters where it carries the row elsewhere.
+fn polyasm_instruction<'tcx>(
+    fx: &mut FunctionCx<'_, '_, 'tcx>,
+    instance: Instance<'tcx>,
+    intrinsic: Symbol,
+    args: &[Spanned<mir::Operand<'tcx>>],
+    destination: CPlace<'tcx>,
+) {
+    match intrinsic {
+        sym::memory_move => {
+            intrinsic_args!(fx, args => (into, from, bytes); intrinsic);
+            let into = into.load_scalar(fx);
+            let from = from.load_scalar(fx);
+            let bytes = bytes.load_scalar(fx);
+            fx.bcx.call_memmove(fx.target_config, into, from, bytes);
+        }
+        sym::memory_set => {
+            intrinsic_args!(fx, args => (into, fill, bytes); intrinsic);
+            let into = into.load_scalar(fx);
+            let fill = fill.load_scalar(fx);
+            let bytes = bytes.load_scalar(fx);
+            fx.bcx.call_memset(fx.target_config, into, fill, bytes);
+        }
+        sym::memory_compare => {
+            intrinsic_args!(fx, args => (left, right, bytes); intrinsic);
+            let left = left.load_scalar(fx);
+            let right = right.load_scalar(fx);
+            let bytes = bytes.load_scalar(fx);
+            let params = vec![AbiParam::new(fx.pointer_type); 3];
+            let returns = vec![AbiParam::new(types::I32)];
+            let answer = fx.lib_call("memcmp", params, returns, &[left, right, bytes])[0];
+            destination.write_cvalue(fx, CValue::by_val(answer, destination.layout()));
+        }
+        _ => {
+            let narrow = |param: AbiParam| {
+                if matches!(param.value_type, types::I8 | types::I16) {
+                    param.uext()
+                } else {
+                    param
+                }
+            };
+            let mut params = Vec::with_capacity(args.len());
+            let mut values = Vec::with_capacity(args.len());
+            for argument in args {
+                let value = crate::base::codegen_operand(fx, &argument.node).load_scalar(fx);
+                params.push(narrow(AbiParam::new(fx.bcx.func.dfg.value_type(value))));
+                values.push(value);
+            }
+            let returns = if destination.layout().is_zst() {
+                Vec::new()
+            } else {
+                vec![narrow(AbiParam::new(
+                    fx.clif_type(destination.layout().ty).expect("PolyASM instruction answer"),
+                ))]
+            };
+            let mut name =
+                rustc_codegen_ssa::polyasm::instruction_symbol(fx.tcx, instance.def_id());
+            if !fx.tcx.intrinsic(instance.def_id()).unwrap().must_be_overridden {
+                let fallback = Instance::new_raw(instance.def_id(), instance.args);
+                name.push('.');
+                name.push_str(fx.tcx.symbol_name(fallback).name);
+            }
+            let answers = fx.lib_call(&name, params, returns, &values).into_owned();
+            if let Some(&answer) = answers.first() {
+                destination.write_cvalue(fx, CValue::by_val(answer, destination.layout()));
+            }
+        }
+    }
 }
 
 fn codegen_float_intrinsic_call<'tcx>(
@@ -414,7 +509,12 @@ fn codegen_float_intrinsic_call<'tcx>(
     // FIXME(bytecodealliance/wasmtime#8312): Use native Cranelift operations
     // for `f16` and `f128` once the lowerings have been implemented in Cranelift.
     let val = match intrinsic {
-        sym::fmaf32 | sym::fmaf64 | sym::fmuladdf32 | sym::fmuladdf64 => {
+        // The PolyASM interchange backend holds zero fused multiply-add rules,
+        // so a PolyASM target enters the `fma` and `fmaf` bodies
+        // `compiler_builtins` compiles for it, through the libcall below.
+        sym::fmaf32 | sym::fmaf64 | sym::fmuladdf32 | sym::fmuladdf64
+            if !crate::driver::polyasm::is_target(fx.tcx.sess) =>
+        {
             fx.bcx.ins().fma(args[0], args[1], args[2])
         }
         sym::copysignf32 | sym::copysignf64 => fx.bcx.ins().fcopysign(args[0], args[1]),
@@ -515,8 +615,57 @@ fn codegen_regular_intrinsic_call<'tcx>(
 
             // FIXME make the copy actually volatile when using emit_small_mem{cpy,move}
             if intrinsic == sym::volatile_copy_nonoverlapping_memory {
-                // FIXME emit_small_memcpy
-                fx.bcx.call_memcpy(fx.target_config, dst, src, byte_amount);
+                let known = crate::optimize::peephole::maybe_known_iconst(&fx.bcx, byte_amount)
+                    .and_then(|known| u64::try_from(known).ok());
+                if crate::driver::polyasm::is_target(fx.tcx.sess) {
+                    match known {
+                        Some(8) => {
+                            let signature = Signature {
+                                params: vec![
+                                    AbiParam::new(fx.pointer_type),
+                                    AbiParam::new(fx.pointer_type),
+                                ],
+                                returns: vec![],
+                                call_conv: CallConv::PreserveAll,
+                            };
+                            let function = fx
+                                .module
+                                .declare_function(
+                                    crate::driver::polyasm::MEMORY_COPY8_INTRINSIC,
+                                    Linkage::Import,
+                                    &signature,
+                                )
+                                .unwrap();
+                            let callee = fx.module.declare_func_in_func(function, fx.bcx.func);
+                            fx.bcx.ins().call(callee, &[dst, src]);
+                        }
+                        Some(64) => {
+                            let signature = Signature {
+                                params: vec![
+                                    AbiParam::new(fx.pointer_type),
+                                    AbiParam::new(fx.pointer_type),
+                                ],
+                                returns: vec![],
+                                call_conv: CallConv::PreserveAll,
+                            };
+                            let function = fx
+                                .module
+                                .declare_function(
+                                    crate::driver::polyasm::MEMORY_COPY64_INTRINSIC,
+                                    Linkage::Import,
+                                    &signature,
+                                )
+                                .unwrap();
+                            let callee = fx.module.declare_func_in_func(function, fx.bcx.func);
+                            fx.bcx.ins().call(callee, &[dst, src]);
+                        }
+                        _ => {
+                            fx.bcx.call_memcpy(fx.target_config, dst, src, byte_amount);
+                        }
+                    }
+                } else {
+                    fx.bcx.call_memcpy(fx.target_config, dst, src, byte_amount);
+                }
             } else {
                 // FIXME emit_small_memmove
                 fx.bcx.call_memmove(fx.target_config, dst, src, byte_amount);
@@ -685,7 +834,22 @@ fn codegen_regular_intrinsic_call<'tcx>(
             let val = arg.load_scalar(fx);
 
             // FIXME trap on `cttz_nonzero` with zero arg.
-            let res = fx.bcx.ins().ctz(val);
+            let res = if crate::driver::polyasm::is_target(fx.tcx.sess)
+                && fx.bcx.func.dfg.value_type(val) == types::I128
+            {
+                // The PolyASM interchange counts 64 bits at most, so a 128-bit
+                // count reads the low half and, where that half is empty, the
+                // high half past it; an empty high half answers 64 there, which
+                // makes an empty value 128.
+                let (low, high) = fx.bcx.ins().isplit(val);
+                let low_count = fx.bcx.ins().ctz(low);
+                let high_count = fx.bcx.ins().ctz(high);
+                let high_count = fx.bcx.ins().iadd_imm_u(high_count, 64);
+                let low_empty = fx.bcx.ins().icmp_imm_u(IntCC::Equal, low, 0);
+                fx.bcx.ins().select(low_empty, high_count, low_count)
+            } else {
+                fx.bcx.ins().ctz(val)
+            };
             let res = clif_intcast(fx, res, types::I32, false);
             let res = CValue::by_val(res, ret.layout());
             ret.write_cvalue(fx, res);

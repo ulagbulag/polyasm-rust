@@ -52,6 +52,7 @@ use crate::traits::{EvaluateConstErr, ProjectionCacheKey, effects, sizedness_fas
 mod _match;
 mod candidate_assembly;
 mod confirmation;
+pub(crate) mod polyasm;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum IntercrateAmbiguityCause<'tcx> {

@@ -453,6 +453,13 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
             // STACK_SIZE is setup in run_in_thread_pool_with_globals, before arriving here.
             sess.opts.recommended_stack_size = *util::STACK_SIZE.get().unwrap();
 
+            if sess.is_polyasm_target() && !matches!(codegen_backend.name(), "cranelift" | "llvm") {
+                sess.dcx().fatal(format!(
+                    "the PolyASM target requires a codegen backend that emits `.poly` bytecode; `{}` does not",
+                    codegen_backend.name()
+                ));
+            }
+
             let target_config = codegen_backend.target_config(&sess);
 
             // Store all of the target features in the session.

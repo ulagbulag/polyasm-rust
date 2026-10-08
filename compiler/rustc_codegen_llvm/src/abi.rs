@@ -340,6 +340,11 @@ impl<'ll, 'tcx> ArgAbiBuilderMethods<'tcx> for Builder<'_, 'll, 'tcx> {
     }
 }
 
+pub(crate) struct Callsite<'ll, 'tcx> {
+    pub instruction: &'ll Value,
+    pub instance: Option<ty::Instance<'tcx>>,
+}
+
 pub(crate) trait FnAbiLlvmExt<'ll, 'tcx> {
     fn llvm_type(&self, cx: &CodegenCx<'ll, 'tcx>) -> &'ll Type;
     fn ptr_to_llvm_type(&self, cx: &CodegenCx<'ll, 'tcx>) -> &'ll Type;
@@ -354,7 +359,7 @@ pub(crate) trait FnAbiLlvmExt<'ll, 'tcx> {
     );
 
     /// Apply attributes to a function call.
-    fn apply_attrs_callsite(&self, bx: &mut Builder<'_, 'll, 'tcx>, callsite: &'ll Value);
+    fn apply_attrs_callsite(&self, bx: &mut Builder<'_, 'll, 'tcx>, callsite: Callsite<'ll, 'tcx>);
 }
 
 impl<'ll, 'tcx> FnAbiLlvmExt<'ll, 'tcx> for FnAbi<'tcx, Ty<'tcx>> {
@@ -462,7 +467,7 @@ impl<'ll, 'tcx> FnAbiLlvmExt<'ll, 'tcx> for FnAbi<'tcx, Ty<'tcx>> {
         if self.ret.layout.is_uninhabited() {
             func_attrs.push(llvm::AttributeKind::NoReturn.create_attr(cx.llcx));
         }
-        if !self.can_unwind {
+        if !self.can_unwind && !cx.may_exit_packet(instance) {
             func_attrs.push(llvm::AttributeKind::NoUnwind.create_attr(cx.llcx));
         }
         match self.conv {
@@ -649,12 +654,13 @@ impl<'ll, 'tcx> FnAbiLlvmExt<'ll, 'tcx> for FnAbi<'tcx, Ty<'tcx>> {
         }
     }
 
-    fn apply_attrs_callsite(&self, bx: &mut Builder<'_, 'll, 'tcx>, callsite: &'ll Value) {
+    fn apply_attrs_callsite(&self, bx: &mut Builder<'_, 'll, 'tcx>, callsite: Callsite<'ll, 'tcx>) {
+        let Callsite { instruction: callsite, instance } = callsite;
         let mut func_attrs = SmallVec::<[_; 2]>::new();
         if self.ret.layout.is_uninhabited() {
             func_attrs.push(llvm::AttributeKind::NoReturn.create_attr(bx.cx.llcx));
         }
-        if !self.can_unwind {
+        if !self.can_unwind && !bx.cx.may_exit_packet(instance) {
             func_attrs.push(llvm::AttributeKind::NoUnwind.create_attr(bx.cx.llcx));
         }
         attributes::apply_to_callsite(callsite, llvm::AttributePlace::Function, &{ func_attrs });

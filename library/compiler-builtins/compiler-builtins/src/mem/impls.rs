@@ -157,7 +157,7 @@ pub unsafe fn copy_forward(mut dest: *mut u8, mut src: *const u8, mut n: usize) 
         while dest_usize.wrapping_add(1) < dest_end {
             src_aligned = src_aligned.wrapping_add(1);
             let cur_word = *src_aligned;
-            let reassembled = if cfg!(target_endian = "little") {
+            let reassembled = if cfg!(any(target_endian = "little", target_abi = "polyasm")) {
                 prev_word >> shift | cur_word << (WORD_SIZE * 8 - shift)
             } else {
                 prev_word << shift | cur_word >> (WORD_SIZE * 8 - shift)
@@ -172,7 +172,7 @@ pub unsafe fn copy_forward(mut dest: *mut u8, mut src: *const u8, mut n: usize) 
         // it is partially out-of-bounds.
         src_aligned = src_aligned.wrapping_add(1);
         let cur_word = load_aligned_partial(src_aligned, offset);
-        let reassembled = if cfg!(target_endian = "little") {
+        let reassembled = if cfg!(any(target_endian = "little", target_abi = "polyasm")) {
             prev_word >> shift | cur_word << (WORD_SIZE * 8 - shift)
         } else {
             prev_word << shift | cur_word >> (WORD_SIZE * 8 - shift)
@@ -273,7 +273,7 @@ pub unsafe fn copy_backward(dest: *mut u8, src: *const u8, mut n: usize) {
         while dest_start.wrapping_add(1) < dest_usize {
             src_aligned = src_aligned.wrapping_sub(1);
             let cur_word = *src_aligned;
-            let reassembled = if cfg!(target_endian = "little") {
+            let reassembled = if cfg!(any(target_endian = "little", target_abi = "polyasm")) {
                 prev_word << (WORD_SIZE * 8 - shift) | cur_word >> shift
             } else {
                 prev_word >> (WORD_SIZE * 8 - shift) | cur_word << shift
@@ -288,7 +288,7 @@ pub unsafe fn copy_backward(dest: *mut u8, src: *const u8, mut n: usize) {
         // it is partially out-of-bounds.
         src_aligned = src_aligned.wrapping_sub(1);
         let cur_word = load_aligned_end_partial(src_aligned, WORD_SIZE - offset);
-        let reassembled = if cfg!(target_endian = "little") {
+        let reassembled = if cfg!(any(target_endian = "little", target_abi = "polyasm")) {
             prev_word << (WORD_SIZE * 8 - shift) | cur_word >> shift
         } else {
             prev_word >> (WORD_SIZE * 8 - shift) | cur_word << shift

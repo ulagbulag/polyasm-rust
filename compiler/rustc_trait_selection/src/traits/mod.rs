@@ -54,6 +54,14 @@ pub use self::engine::{FulfillmentEngine, ObligationCtxt};
 pub use self::fulfill::{FulfillmentContext, OldSolverError, PendingPredicateObligation};
 pub use self::normalize::NormalizeExt;
 pub use self::project::{normalize_inherent_projection, normalize_projection_term};
+pub use self::select::polyasm::{
+    PolyasmStatementSelection, PolyasmStaticCallableSelection, PolyasmStaticCallableSelectionError,
+    explain_normalized_polyasm_rejection, explain_normalized_polyasm_statement_rejection,
+    normalized_polyasm_property_holds, normalized_polyasm_statement_property_holds,
+    normalized_polyasm_static_schedule, polyasm_offload_roots, polyasm_statement_selection,
+    polyasm_static_callable_selection, polyasm_static_callable_selection_on,
+    polyasm_static_clock_hz,
+};
 pub use self::select::{
     EvaluationCache, EvaluationResult, IntercrateAmbiguityCause, OverflowError, SelectionCache,
     SelectionContext,

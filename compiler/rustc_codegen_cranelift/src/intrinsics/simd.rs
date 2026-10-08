@@ -1,5 +1,6 @@
 //! Codegen SIMD intrinsics.
 
+use cranelift_codegen::ir::ConstantData;
 use cranelift_codegen::ir::immediates::Offset32;
 use rustc_abi::Endian;
 use rustc_middle::ty::SimdAlign;
@@ -17,6 +18,47 @@ fn report_simd_type_validation_error(
     fx.tcx.dcx().span_err(span, format!("invalid monomorphization of `{}` intrinsic: expected SIMD input type, found non-SIMD `{}`", intrinsic, ty));
     // Prevent verifier error
     fx.bcx.ins().trap(TrapCode::user(1 /* unreachable */).unwrap());
+}
+
+// The PolyASM byte shuffle is encoded, translated and decoded; the portable
+// JIT carries zero arms for `VectorShuffle8X128`, and emitting it there turns
+// every Teddy body into an unlowered guest, so the whole-vector form stays
+// behind this switch.
+const POLYASM_SHUFFLE: bool = true;
+
+const POLYASM_SPLAT: bool = false;
+
+#[doc = "Names one PolyASM byte shuffle rather than sixteen lane copies."]
+fn polyasm_shuffle<'tcx, I>(
+    fx: &mut FunctionCx<'_, '_, 'tcx>,
+    x: CValue<'tcx>,
+    y: CValue<'tcx>,
+    ret: CPlace<'tcx>,
+    target: BasicBlock,
+    indexes: &[I],
+) -> bool
+where
+    I: Copy + Into<u64>,
+{
+    // Only a sixteen-lane byte vector has a PolyASM shuffle to name. Every
+    // other width keeps the lane-by-lane form, which is what the shared
+    // targets already emit.
+    if !POLYASM_SHUFFLE
+        || !polyasm_byte_vector(fx.tcx, x.layout().ty)
+        || !polyasm_byte_vector(fx.tcx, ret.layout().ty)
+        || indexes.len() != 16
+    {
+        return false;
+    }
+    let mask = indexes.iter().map(|index| (*index).into() as u8).collect::<Vec<u8>>();
+    let mask = fx.bcx.func.dfg.immediates.push(ConstantData::from(&mask[..]));
+    let left = x.load_scalar(fx);
+    let right = y.load_scalar(fx);
+    let lanes = fx.bcx.ins().shuffle(left, right, mask);
+    ret.write_cvalue(fx, CValue::by_val(lanes, ret.layout()));
+    let ret_block = fx.get_block(target);
+    fx.bcx.ins().jump(ret_block, &[]);
+    true
 }
 
 pub(super) fn codegen_simd_intrinsic_call<'tcx>(
@@ -52,6 +94,19 @@ pub(super) fn codegen_simd_intrinsic_call<'tcx>(
 
             if !x.layout().ty.is_simd() {
                 report_simd_type_validation_error(fx, intrinsic, span, x.layout().ty);
+                return;
+            }
+
+            if intrinsic == sym::simd_eq
+                && polyasm_byte_vector(fx.tcx, x.layout().ty)
+                && polyasm_byte_vector(fx.tcx, ret.layout().ty)
+            {
+                let left = x.load_scalar(fx);
+                let right = y.load_scalar(fx);
+                let lanes = fx.bcx.ins().icmp(IntCC::Equal, left, right);
+                ret.write_cvalue(fx, CValue::by_val(lanes, ret.layout()));
+                let ret_block = fx.get_block(target);
+                fx.bcx.ins().jump(ret_block, &[]);
                 return;
             }
 
@@ -153,6 +208,10 @@ pub(super) fn codegen_simd_intrinsic_call<'tcx>(
                 assert!(u64::from(idx) < total_len, "idx {} out of range 0..{}", idx, total_len);
             }
 
+            if polyasm_shuffle(fx, x, y, ret, target, &indexes) {
+                return;
+            }
+
             for (out_idx, in_idx) in indexes.into_iter().enumerate() {
                 let in_lane = if u64::from(in_idx) < lane_count {
                     x.value_lane(fx, in_idx.into())
@@ -247,6 +306,10 @@ pub(super) fn codegen_simd_intrinsic_call<'tcx>(
                 assert!(u64::from(idx) < total_len, "idx {} out of range 0..{}", idx, total_len);
             }
 
+            if polyasm_shuffle(fx, x, y, ret, target, &indexes) {
+                return;
+            }
+
             for (out_idx, in_idx) in indexes.into_iter().enumerate() {
                 let in_lane = if u64::from(in_idx) < lane_count {
                     x.value_lane(fx, in_idx.into())
@@ -255,6 +318,44 @@ pub(super) fn codegen_simd_intrinsic_call<'tcx>(
                 };
                 let out_lane = ret.place_lane(fx, u64::try_from(out_idx).unwrap());
                 out_lane.write_cvalue(fx, in_lane);
+            }
+        }
+
+        sym::simd_swizzle_dyn => {
+            intrinsic_args!(fx, args => (table, indices); intrinsic);
+
+            if !table.layout().ty.is_simd() {
+                report_simd_type_validation_error(fx, intrinsic, span, table.layout().ty);
+                return;
+            }
+
+            if polyasm_byte_vector(fx.tcx, table.layout().ty)
+                && polyasm_byte_vector(fx.tcx, ret.layout().ty)
+            {
+                let left = table.load_scalar(fx);
+                let right = indices.load_scalar(fx);
+                let lanes = fx.bcx.ins().swizzle(left, right);
+                ret.write_cvalue(fx, CValue::by_val(lanes, ret.layout()));
+                let ret_block = fx.get_block(target);
+                fx.bcx.ins().jump(ret_block, &[]);
+                return;
+            }
+
+            let (lane_count, lane_ty) = table.layout().ty.simd_size_and_type(fx.tcx);
+            let lane_layout = fx.layout_of(lane_ty);
+            let lane_clif_ty = fx.clif_type(lane_ty).unwrap();
+            let block = lane_count.min(16);
+            let zero = fx.bcx.ins().iconst(lane_clif_ty, 0);
+            for lane in 0..lane_count {
+                let base = i64::try_from(lane / block * block).unwrap();
+                let index = indices.value_lane(fx, lane).load_scalar(fx);
+                let outside = fx.bcx.ins().icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, index, 16);
+                let selected = fx.bcx.ins().band_imm_u(index, 0xf);
+                let selected = fx.bcx.ins().uextend(fx.pointer_type, selected);
+                let selected = fx.bcx.ins().iadd_imm_u(selected, base);
+                let value = table.value_lane_dyn(fx, selected).load_scalar(fx);
+                let value = fx.bcx.ins().select(outside, zero, value);
+                ret.place_lane(fx, lane).write_cvalue(fx, CValue::by_val(value, lane_layout));
             }
         }
 
@@ -371,6 +472,17 @@ pub(super) fn codegen_simd_intrinsic_call<'tcx>(
                 );
             }
 
+            if POLYASM_SPLAT && polyasm_byte_vector(fx.tcx, ret.layout().ty) {
+                let scalar = value.load_scalar(fx);
+                let lane_clif_ty = fx.clif_type(lane_ty).unwrap();
+                let vector_clif_ty = lane_clif_ty.by(u32::try_from(lane_count).unwrap()).unwrap();
+                let lanes = fx.bcx.ins().splat(vector_clif_ty, scalar);
+                ret.write_cvalue(fx, CValue::by_val(lanes, ret.layout()));
+                let ret_block = fx.get_block(target);
+                fx.bcx.ins().jump(ret_block, &[]);
+                return;
+            }
+
             for i in 0..lane_count {
                 let ret_lane = ret.place_lane(fx, i);
                 ret_lane.write_cvalue(fx, value);
@@ -420,6 +532,23 @@ pub(super) fn codegen_simd_intrinsic_call<'tcx>(
         | sym::simd_or
         | sym::simd_xor => {
             intrinsic_args!(fx, args => (x, y); intrinsic);
+
+            if matches!(intrinsic, sym::simd_and | sym::simd_or)
+                && polyasm_byte_vector(fx.tcx, x.layout().ty)
+                && polyasm_byte_vector(fx.tcx, ret.layout().ty)
+            {
+                let left = x.load_scalar(fx);
+                let right = y.load_scalar(fx);
+                let lanes = if intrinsic == sym::simd_and {
+                    fx.bcx.ins().band(left, right)
+                } else {
+                    fx.bcx.ins().bor(left, right)
+                };
+                ret.write_cvalue(fx, CValue::by_val(lanes, ret.layout()));
+                let ret_block = fx.get_block(target);
+                fx.bcx.ins().jump(ret_block, &[]);
+                return;
+            }
 
             // FIXME use vector instructions when possible
             simd_pair_for_each_lane(fx, x, y, ret, &|fx, lane_ty, _ret_lane_ty, x_lane, y_lane| {
@@ -483,6 +612,104 @@ pub(super) fn codegen_simd_intrinsic_call<'tcx>(
                     },
                 )
             });
+        }
+
+        sym::simd_shl_scalar | sym::simd_shr_scalar => {
+            intrinsic_args!(fx, args => (x, bits); intrinsic);
+
+            if !x.layout().ty.is_simd() {
+                report_simd_type_validation_error(fx, intrinsic, span, x.layout().ty);
+                return;
+            }
+
+            let amount = bits.load_scalar(fx);
+
+            // The amount is one scalar, so the whole vector is one Cranelift
+            // shift. That lets the Pulley backend name `vshli8x16` and
+            // `vshri8x16_{u,s}`: a splatted amount vector stays unrecognized
+            // as a splat and falls back to sixteen scalar shifts.
+            if polyasm_byte_vector(fx.tcx, x.layout().ty)
+                && polyasm_byte_vector(fx.tcx, ret.layout().ty)
+            {
+                let value = x.load_scalar(fx);
+                let (_, lane_ty) = x.layout().ty.simd_size_and_type(fx.tcx);
+                let lanes = match (lane_ty.kind(), intrinsic) {
+                    (_, sym::simd_shl_scalar) => fx.bcx.ins().ishl(value, amount),
+                    (ty::Uint(_), _) => fx.bcx.ins().ushr(value, amount),
+                    _ => fx.bcx.ins().sshr(value, amount),
+                };
+                ret.write_cvalue(fx, CValue::by_val(lanes, ret.layout()));
+                let ret_block = fx.get_block(target);
+                fx.bcx.ins().jump(ret_block, &[]);
+                return;
+            }
+
+            simd_for_each_lane(fx, x, ret, &|fx, lane_ty, _ret_lane_ty, lane| match (
+                lane_ty.kind(),
+                intrinsic,
+            ) {
+                (_, sym::simd_shl_scalar) => fx.bcx.ins().ishl(lane, amount),
+                (ty::Uint(_), _) => fx.bcx.ins().ushr(lane, amount),
+                _ => fx.bcx.ins().sshr(lane, amount),
+            });
+        }
+
+        sym::simd_load_unaligned => {
+            intrinsic_args!(fx, args => (pointer); intrinsic);
+
+            if !ret.layout().ty.is_simd() {
+                report_simd_type_validation_error(fx, intrinsic, span, ret.layout().ty);
+                return;
+            }
+
+            let address = pointer.load_scalar(fx);
+            let flags = MemFlagsData::new().with_notrap();
+            let (lane_count, lane_ty) = ret.layout().ty.simd_size_and_type(fx.tcx);
+            let lane_clif_ty = fx.clif_type(lane_ty).unwrap();
+
+            if polyasm_byte_vector(fx.tcx, ret.layout().ty) {
+                let vector_clif_ty = lane_clif_ty.by(u32::try_from(lane_count).unwrap()).unwrap();
+                let value = fx.bcx.ins().load(vector_clif_ty, flags, address, Offset32::new(0));
+                ret.write_cvalue(fx, CValue::by_val(value, ret.layout()));
+                let ret_block = fx.get_block(target);
+                fx.bcx.ins().jump(ret_block, &[]);
+                return;
+            }
+
+            let lane_layout = fx.layout_of(lane_ty);
+            for lane_idx in 0..lane_count {
+                let offset = lane_idx as i32 * lane_clif_ty.bytes() as i32;
+                let lane = fx.bcx.ins().load(lane_clif_ty, flags, address, Offset32::new(offset));
+                ret.place_lane(fx, lane_idx).write_cvalue(fx, CValue::by_val(lane, lane_layout));
+            }
+        }
+
+        sym::simd_store_unaligned => {
+            intrinsic_args!(fx, args => (pointer, value); intrinsic);
+
+            if !value.layout().ty.is_simd() {
+                report_simd_type_validation_error(fx, intrinsic, span, value.layout().ty);
+                return;
+            }
+
+            let address = pointer.load_scalar(fx);
+            let flags = MemFlagsData::new().with_notrap();
+            let (lane_count, lane_ty) = value.layout().ty.simd_size_and_type(fx.tcx);
+            let lane_clif_ty = fx.clif_type(lane_ty).unwrap();
+
+            if polyasm_byte_vector(fx.tcx, value.layout().ty) {
+                let lanes = value.load_scalar(fx);
+                fx.bcx.ins().store(flags, lanes, address, Offset32::new(0));
+                let ret_block = fx.get_block(target);
+                fx.bcx.ins().jump(ret_block, &[]);
+                return;
+            }
+
+            for lane_idx in 0..lane_count {
+                let offset = lane_idx as i32 * lane_clif_ty.bytes() as i32;
+                let lane = value.value_lane(fx, lane_idx).load_scalar(fx);
+                fx.bcx.ins().store(flags, lane, address, Offset32::new(offset));
+            }
         }
 
         // FIXME: simd_relaxed_fma doesn't relax to non-fused multiply-add
@@ -930,24 +1157,38 @@ pub(super) fn codegen_simd_intrinsic_call<'tcx>(
 
             let res_type =
                 Type::int_with_byte_size(u16::try_from(expected_bytes).unwrap()).unwrap();
-            let mut res = type_zero_value(&mut fx.bcx, res_type);
+            // A byte vector gathers its lane signs in one instruction, which
+            // numbers lane zero as the least significant bit and so answers
+            // the little-endian spelling alone.
+            let res = if polyasm_byte_vector(fx.tcx, a.layout().ty)
+                && fx.tcx.sess.target.endian == Endian::Little
+            {
+                let value = a.load_scalar(fx);
+                let bits = fx.bcx.ins().vhigh_bits(types::I32, value);
+                clif_intcast(fx, bits, res_type, false)
+            } else {
+                let mut res = type_zero_value(&mut fx.bcx, res_type);
 
-            let lanes = match fx.tcx.sess.target.endian {
-                Endian::Big => Box::new(0..lane_count) as Box<dyn Iterator<Item = u64>>,
-                Endian::Little => Box::new((0..lane_count).rev()) as Box<dyn Iterator<Item = u64>>,
+                let lanes = match fx.tcx.sess.target.endian {
+                    Endian::Big => Box::new(0..lane_count) as Box<dyn Iterator<Item = u64>>,
+                    Endian::Little => {
+                        Box::new((0..lane_count).rev()) as Box<dyn Iterator<Item = u64>>
+                    }
+                };
+                for lane in lanes {
+                    let a_lane = a.value_lane(fx, lane).load_scalar(fx);
+
+                    // extract sign bit of an int
+                    let a_lane_sign =
+                        fx.bcx.ins().ushr_imm_u(a_lane, i64::from(lane_clif_ty.bits() - 1));
+
+                    // shift sign bit into result
+                    let a_lane_sign = clif_intcast(fx, a_lane_sign, res_type, false);
+                    res = fx.bcx.ins().ishl_imm_u(res, 1);
+                    res = fx.bcx.ins().bor(res, a_lane_sign);
+                }
+                res
             };
-            for lane in lanes {
-                let a_lane = a.value_lane(fx, lane).load_scalar(fx);
-
-                // extract sign bit of an int
-                let a_lane_sign =
-                    fx.bcx.ins().ushr_imm_u(a_lane, i64::from(lane_clif_ty.bits() - 1));
-
-                // shift sign bit into result
-                let a_lane_sign = clif_intcast(fx, a_lane_sign, res_type, false);
-                res = fx.bcx.ins().ishl_imm_u(res, 1);
-                res = fx.bcx.ins().bor(res, a_lane_sign);
-            }
 
             match ret.layout().ty.kind() {
                 ty::Uint(i) if i.bit_width() == Some(expected_int_bits) => {}

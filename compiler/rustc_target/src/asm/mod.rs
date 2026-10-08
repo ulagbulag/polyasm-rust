@@ -273,6 +273,7 @@ impl InlineAsmArch {
             Arch::Sparc => Some(Self::Sparc),
             Arch::Sparc64 => Some(Self::Sparc64),
             Arch::SpirV => Some(Self::SpirV),
+            Arch::Polyasm => None,
             Arch::Wasm32 => Some(Self::Wasm32),
             Arch::Wasm64 => Some(Self::Wasm64),
             Arch::Bpf => Some(Self::Bpf),

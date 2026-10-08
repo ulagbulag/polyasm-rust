@@ -94,6 +94,21 @@ impl<'a, T: Eq + Hash + Copy + 'a> Extend<&'a T> for ExpectedValues<T> {
 
 /// Disallow builtin cfgs from the CLI.
 pub(crate) fn disallow_cfgs(sess: &Session, user_cfgs: &Cfg) {
+    if sess.is_polyasm_target() {
+        for &(name, value) in user_cfgs {
+            if name == sym::target_endian {
+                sess.dcx().fatal(
+                    "PolyASM has no native endianness; `--cfg target_endian` is not permitted",
+                );
+            }
+            if name == sym::getrandom_backend && value != Some(sym::custom) {
+                sess.dcx().fatal(
+                    "PolyASM fixes `getrandom_backend` to `custom`; an incompatible `--cfg` value is not permitted",
+                );
+            }
+        }
+    }
+
     let disallow = |cfg: &(Symbol, Option<Symbol>), controlled_by| {
         let cfg_name = cfg.0;
         let cfg = if let Some(value) = cfg.1 {
@@ -252,9 +267,15 @@ pub(crate) fn default_configuration(sess: &Session) -> Cfg {
         ins_none!(sym::sanitizer_cfi_normalize_integers);
     }
 
+    if sess.is_polyasm_target() {
+        ins_sym!(sym::getrandom_backend, sym::custom);
+    }
+
     ins_sym!(sym::target_abi, sess.target.cfg_abi.desc_symbol());
     ins_sym!(sym::target_arch, sess.target.arch.desc_symbol());
-    ins_sym!(sym::target_endian, sess.target.endian.desc_symbol());
+    if !sess.is_polyasm_target() {
+        ins_sym!(sym::target_endian, sess.target.endian.desc_symbol());
+    }
     ins_sym!(sym::target_env, sess.target.env.desc_symbol());
     ins_sym!(sym::target_object_format, sess.target.options.binary_format.desc_symbol());
 
@@ -383,6 +404,8 @@ impl CheckCfg {
         ins!(sym::debug_assertions, no_values);
 
         ins!(sym::fmt_debug, empty_values).extend(FmtDebug::all());
+
+        ins!(sym::getrandom_backend, empty_values).insert(sym::custom);
 
         // These four are never set by rustc, but we set them anyway; they
         // should not trigger the lint because `cargo clippy`, `cargo doc`,

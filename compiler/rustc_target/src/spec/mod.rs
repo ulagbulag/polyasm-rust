@@ -1305,6 +1305,28 @@ macro_rules! supported_targets {
     };
 }
 
+/// The built-in PolyASM target tuples, one architecture at three pointer
+/// widths.
+///
+/// One list in place of a tuple comparison at each site: a compiler-private
+/// PolyASM rule holds for the whole architecture, so a site that named a single
+/// tuple would silently exempt the other two.
+pub const POLYASM_TARGET_TUPLES: &[&str] =
+    &["polyasm-unknown-unknown", "polyasm32-unknown-unknown", "polyasm64-unknown-unknown"];
+
+/// The PolyASM tuple whose image leaves the pointer width to the machine it
+/// lands on.
+///
+/// A session of this tuple compiles the crate at the tuple's own 32-bit width,
+/// and a companion session compiles the same crate under
+/// [`POLYASM_PORT_TUPLE`]; the final image carries both compilations as one
+/// port per width.
+pub const POLYASM_UNFIXED_TUPLE: &str = "polyasm-unknown-unknown";
+
+/// The fixed PolyASM tuple the companion session of a
+/// [`POLYASM_UNFIXED_TUPLE`] crate compiles under.
+pub const POLYASM_PORT_TUPLE: &str = "polyasm64-unknown-unknown";
+
 supported_targets! {
     ("x86_64-unknown-linux-gnu", x86_64_unknown_linux_gnu),
     ("x86_64-unknown-linux-gnux32", x86_64_unknown_linux_gnux32),
@@ -1510,6 +1532,10 @@ supported_targets! {
     ("i686-win7-windows-msvc", i686_win7_windows_msvc),
     ("thumbv7a-pc-windows-msvc", thumbv7a_pc_windows_msvc),
     ("thumbv7a-uwp-windows-msvc", thumbv7a_uwp_windows_msvc),
+
+    ("polyasm-unknown-unknown", polyasm_unknown_unknown),
+    ("polyasm32-unknown-unknown", polyasm32_unknown_unknown),
+    ("polyasm64-unknown-unknown", polyasm64_unknown_unknown),
 
     ("wasm32-unknown-emscripten", wasm32_unknown_emscripten),
     ("wasm32-unknown-unknown", wasm32_unknown_unknown),
@@ -1776,6 +1802,7 @@ crate::target_spec_enum! {
         Msp430 = "msp430",
         Nvptx64 = "nvptx64",
         PowerPC = "powerpc",
+        Polyasm = "polyasm",
         PowerPC64 = "powerpc64",
         RiscV32 = "riscv32",
         RiscV64 = "riscv64",
@@ -1820,6 +1847,7 @@ impl Arch {
             Self::Sparc => sym::sparc,
             Self::Sparc64 => sym::sparc64,
             Self::SpirV => sym::spirv,
+            Self::Polyasm => sym::polyasm,
             Self::Wasm32 => sym::wasm32,
             Self::Wasm64 => sym::wasm64,
             Self::X86 => sym::x86,
@@ -1836,7 +1864,7 @@ impl Arch {
         match self {
             AArch64 | RiscV32 | RiscV64 => true,
             AmdGpu | Arm | Arm64EC | Avr | Bpf | CSky | Hexagon | LoongArch32 | LoongArch64
-            | M68k | Mips | Mips32r6 | Mips64 | Mips64r6 | Msp430 | Nvptx64 | PowerPC
+            | M68k | Mips | Mips32r6 | Mips64 | Mips64r6 | Msp430 | Nvptx64 | PowerPC | Polyasm
             | PowerPC64 | S390x | Sparc | Sparc64 | SpirV | Wasm32 | Wasm64 | X86 | X86_64
             | Xtensa | Other(_) => false,
         }
@@ -1956,6 +1984,7 @@ crate::target_spec_enum! {
         Llvm = "llvm",
         MacAbi = "macabi",
         Pauthtest = "pauthtest",
+        Polyasm = "polyasm",
         Sim = "sim",
         SoftFloat = "softfloat",
         Spe = "spe",
@@ -2084,7 +2113,7 @@ impl Target {
 
         match self.arch {
             // These targets just inherently do not support c-variadic definitions.
-            Bpf | SpirV => CVariadicStatus::NotSupported,
+            Bpf | Polyasm | SpirV => CVariadicStatus::NotSupported,
 
             // The c-variadic ABI for this target may change in the future, per this comment in
             // clang:
@@ -2894,10 +2923,18 @@ impl Target {
     fn test_target(mut self) {
         let recycled_target =
             Target::from_json(&serde_json::to_string(&self.to_json()).unwrap()).map(|(j, _)| j);
+        let has_compiler_private_abi = self.cfg_abi == CfgAbi::Polyasm;
         self.update_to_cli();
         self.check_consistency(TargetKind::Builtin)
             .unwrap_or_else(|err| panic!("Target consistency check failed:\n{err}"));
-        assert_eq!(recycled_target, Ok(self));
+        if has_compiler_private_abi {
+            assert!(
+                recycled_target.is_err(),
+                "compiler-private target ABI must not round-trip through target JSON"
+            );
+        } else {
+            assert_eq!(recycled_target, Ok(self));
+        }
     }
 
     // Add your target to the whitelist if it has `std` library
@@ -3087,6 +3124,7 @@ impl Target {
             Arch::Arm64EC => (Architecture::Aarch64, Some(object::SubArchitecture::Arm64EC)),
             Arch::AmdGpu
             | Arch::Nvptx64
+            | Arch::Polyasm
             | Arch::SpirV
             | Arch::Wasm32
             | Arch::Wasm64

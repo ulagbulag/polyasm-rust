@@ -6,19 +6,26 @@ use std::{debug_assert_matches, iter};
 use rustc_abi::{ExternAbi, FieldIdx};
 use rustc_attr_ir::lang_items::LangItem;
 use rustc_attr_ir::{InlineAttr, OptimizeAttr};
+use rustc_data_structures::fx::{FxHashMap, FxIndexSet};
 use rustc_data_structures::thin_vec::ThinVec;
+use rustc_hir as hir;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
+use rustc_hir::intravisit::{self, Visitor as HirVisitor};
 use rustc_index::Idx;
 use rustc_index::bit_set::DenseBitSet;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrs;
 use rustc_middle::mir::visit::*;
 use rustc_middle::mir::*;
+use rustc_middle::mono::{
+    is_polyasm_witness_marker, polyasm_witness_callables, resolve_polyasm_callable,
+};
 use rustc_middle::ty::{
-    self, Instance, InstanceKind, ShimKind, Ty, TyCtxt, TypeFlags, TypeVisitableExt, Unnormalized,
+    self, Instance, InstanceKind, ShimKind, Ty, TyCtxt, TypeFlags, TypeFoldable, TypeVisitableExt,
+    Unnormalized,
 };
 use rustc_session::config::{DebugInfo, OptLevel};
-use rustc_span::{Spanned, bug};
+use rustc_span::{Spanned, bug, sym};
 use tracing::{debug, instrument, trace, trace_span};
 
 use crate::cost_checker::{CostChecker, is_call_like};
@@ -327,8 +334,9 @@ impl<'tcx> Inliner<'tcx> for NormalInliner<'tcx> {
         self.changed
     }
 
-    fn should_inline_for_callee(&self, _: DefId) -> bool {
-        true
+    fn should_inline_for_callee(&self, def_id: DefId) -> bool {
+        !self.tcx.sess.is_polyasm_target()
+            || !self.tcx.polyasm_witness_def_ids(()).contains(&def_id)
     }
 
     fn check_codegen_attributes_extra(
@@ -477,6 +485,345 @@ impl<'tcx> Inliner<'tcx> for NormalInliner<'tcx> {
     fn on_inline_failure(&self, _: &CallSite<'tcx>, _: &'static str) {}
 }
 
+pub(crate) fn polyasm_witness_def_ids(tcx: TyCtxt<'_>, (): ()) -> &[DefId] {
+    if !tcx.sess.is_polyasm_target() {
+        return &[];
+    }
+    let mut def_ids = FxIndexSet::default();
+    let mut parameter_witness = FxHashMap::default();
+    let mut calls = Vec::new();
+    for owner in tcx.hir_body_owners() {
+        WitnessVisitor {
+            tcx,
+            owner: owner.to_def_id(),
+            typeck: tcx.typeck(owner),
+            def_ids: &mut def_ids,
+            parameter_witness: &mut parameter_witness,
+            calls: &mut calls,
+        }
+        .visit_expr(tcx.hir_body_owned_by(owner).value);
+    }
+    for call in &calls {
+        if !call.callee.is_local() && has_callable_argument(call.args) {
+            let parameters =
+                external_witness_parameters(tcx, call.callee, &mut FxIndexSet::default());
+            parameter_witness.entry(call.callee).or_default().extend(parameters);
+        }
+    }
+    loop {
+        let mut changed = false;
+        for call in &calls {
+            let parameters = parameter_witness
+                .get(&call.callee)
+                .map(|parameters: &FxIndexSet<u32>| parameters.iter().copied().collect::<Vec<_>>())
+                .unwrap_or_default();
+            for parameter in parameters {
+                if let Some(callable) =
+                    call.args.get(parameter as usize).and_then(|arg| arg.as_type())
+                {
+                    changed |= record_witness_callable(
+                        call.caller,
+                        callable,
+                        &mut def_ids,
+                        &mut parameter_witness,
+                    );
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    tcx.arena.alloc_from_iter(def_ids)
+}
+
+/// Returns whether `instance` is only a compile-time marker registration
+/// boundary and therefore carries zero runtime operations.
+///
+/// This deliberately recognizes a very small MIR language. Every concrete
+/// argument is drop-free, the wrapper returns unit along one finite linear
+/// path, and each call on that path is a property marker or another wrapper
+/// satisfying the same rules. Any executable statement, alternate control-flow
+/// edge, value result, unresolved call, or recursive cycle fails closed.
+/// Generic arguments are normalized at every edge, including MIR read from
+/// cross-crate metadata.
+pub(crate) fn polyasm_witness_only_wrapper<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> bool {
+    if !tcx.sess.is_polyasm_target() {
+        return false;
+    }
+    witness_only_wrapper(tcx, instance, &mut FxIndexSet::default(), &mut FxHashMap::default())
+}
+
+fn witness_only_wrapper<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    visiting: &mut FxIndexSet<Instance<'tcx>>,
+    memoized: &mut FxHashMap<Instance<'tcx>, bool>,
+) -> bool {
+    if let Some(&result) = memoized.get(&instance) {
+        return result;
+    }
+    if !matches!(instance.def, InstanceKind::Item(_))
+        || !matches!(tcx.def_kind(instance.def_id()), DefKind::Fn | DefKind::AssocFn)
+        || !tcx.is_mir_available(instance.def_id())
+        || [sym::polyasm_require_always, sym::polyasm_require_not_always]
+            .into_iter()
+            .any(|marker| tcx.is_diagnostic_item(marker, instance.def_id()))
+        || !visiting.insert(instance)
+    {
+        return false;
+    }
+
+    let result = witness_only_wrapper_body(tcx, instance, visiting, memoized);
+    visiting.shift_remove(&instance);
+    memoized.insert(instance, result);
+    result
+}
+
+fn witness_only_wrapper_body<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    visiting: &mut FxIndexSet<Instance<'tcx>>,
+    memoized: &mut FxHashMap<Instance<'tcx>, bool>,
+) -> bool {
+    let body = tcx.instance_mir(instance.def);
+    let typing_env = ty::TypingEnv::fully_monomorphized();
+    let Some(return_ty) = instantiate_witness_mir(tcx, instance, body.return_ty()) else {
+        return false;
+    };
+    if !return_ty.is_unit() {
+        return false;
+    }
+    for local in body.args_iter() {
+        let Some(argument_ty) = instantiate_witness_mir(tcx, instance, body.local_decls[local].ty)
+        else {
+            return false;
+        };
+        if argument_ty.needs_drop(tcx, typing_env) {
+            return false;
+        }
+    }
+
+    let mut block = START_BLOCK;
+    let mut visited = FxIndexSet::default();
+    let mut has_witness = false;
+    loop {
+        if !visited.insert(block) {
+            return false;
+        }
+        let data = &body.basic_blocks[block];
+        if data.is_cleanup
+            || data.statements.iter().any(|statement| {
+                !matches!(
+                    &statement.kind,
+                    StatementKind::AscribeUserType(..)
+                        | StatementKind::ConstEvalCounter
+                        | StatementKind::FakeRead(..)
+                        | StatementKind::Nop
+                        | StatementKind::PlaceMention(..)
+                        | StatementKind::StorageDead(..)
+                        | StatementKind::StorageLive(..)
+                )
+            })
+        {
+            return false;
+        }
+
+        match &data.terminator().kind {
+            TerminatorKind::Goto { target } => block = *target,
+            TerminatorKind::Return => break,
+            TerminatorKind::Call { func, args, destination, target: Some(target), .. } => {
+                let Some((def_id, generic_args)) = func.const_fn_def() else {
+                    return false;
+                };
+                let Some(generic_args) = instantiate_witness_mir(tcx, instance, generic_args)
+                else {
+                    return false;
+                };
+                if generic_args.has_non_region_param() || generic_args.has_infer() {
+                    return false;
+                }
+                let Some(destination_ty) =
+                    instantiate_witness_mir(tcx, instance, destination.ty(body, tcx).ty)
+                else {
+                    return false;
+                };
+                if !destination_ty.is_unit()
+                    || args.iter().any(|argument| {
+                        instantiate_witness_mir(
+                            tcx,
+                            instance,
+                            argument.node.ty(&body.local_decls, tcx),
+                        )
+                        .is_none_or(|ty| ty.needs_drop(tcx, typing_env))
+                    })
+                {
+                    return false;
+                }
+
+                let marker = [sym::polyasm_require_always, sym::polyasm_require_not_always]
+                    .into_iter()
+                    .any(|marker| tcx.is_diagnostic_item(marker, def_id));
+                if marker {
+                    if args.len() != 1
+                        || polyasm_witness_callables(tcx, def_id, generic_args)[0]
+                            .and_then(|callable| {
+                                resolve_polyasm_callable(
+                                    tcx,
+                                    callable,
+                                    data.terminator().source_info.span,
+                                )
+                            })
+                            .is_none()
+                    {
+                        return false;
+                    }
+                    has_witness = true;
+                } else {
+                    let Ok(Some(callee)) =
+                        Instance::try_resolve(tcx, typing_env, def_id, generic_args)
+                    else {
+                        return false;
+                    };
+                    if !witness_only_wrapper(tcx, callee, visiting, memoized) {
+                        return false;
+                    }
+                    has_witness = true;
+                }
+                block = *target;
+            }
+            _ => return false,
+        }
+    }
+
+    has_witness && visited.len() == body.basic_blocks.len()
+}
+
+fn instantiate_witness_mir<'tcx, T>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+    value: T,
+) -> Option<T>
+where
+    T: TypeFoldable<TyCtxt<'tcx>>,
+{
+    instance
+        .try_instantiate_mir_and_normalize_erasing_regions(
+            tcx,
+            ty::TypingEnv::fully_monomorphized(),
+            ty::EarlyBinder::bind(tcx, value),
+        )
+        .ok()
+}
+
+struct WitnessCall<'tcx> {
+    caller: DefId,
+    callee: DefId,
+    args: ty::GenericArgsRef<'tcx>,
+}
+
+struct WitnessVisitor<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
+    owner: DefId,
+    typeck: &'tcx ty::TypeckResults<'tcx>,
+    def_ids: &'a mut FxIndexSet<DefId>,
+    parameter_witness: &'a mut FxHashMap<DefId, FxIndexSet<u32>>,
+    calls: &'a mut Vec<WitnessCall<'tcx>>,
+}
+
+impl<'tcx> HirVisitor<'tcx> for WitnessVisitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expression: &'tcx hir::Expr<'tcx>) {
+        if let hir::ExprKind::Call(callee, _) = expression.kind
+            && let ty::FnDef(marker, args) = *self.typeck.expr_ty(callee).kind()
+        {
+            let args = args.skip_binder();
+            let mut marker_call = false;
+            for callable in polyasm_witness_callables(self.tcx, marker, args).into_iter().flatten()
+            {
+                marker_call = true;
+                record_witness_callable(self.owner, callable, self.def_ids, self.parameter_witness);
+            }
+            if !marker_call {
+                self.calls.push(WitnessCall { caller: self.owner, callee: marker, args });
+            }
+        } else if let hir::ExprKind::MethodCall(..) = expression.kind
+            && let Some(callee) = self.typeck.type_dependent_def_id(expression.hir_id)
+        {
+            self.calls.push(WitnessCall {
+                caller: self.owner,
+                callee,
+                args: self.typeck.node_args(expression.hir_id),
+            });
+        }
+        intravisit::walk_expr(self, expression);
+    }
+}
+
+fn external_witness_parameters(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    visiting: &mut FxIndexSet<DefId>,
+) -> FxIndexSet<u32> {
+    let mut parameters = FxIndexSet::default();
+    if !visiting.insert(def_id) || !tcx.is_mir_available(def_id) {
+        return parameters;
+    }
+    let body = tcx.optimized_mir(def_id);
+    for block in body.basic_blocks.iter() {
+        let TerminatorKind::Call { func, .. } = &block.terminator().kind else {
+            continue;
+        };
+        let ty::FnDef(marker, args) = *func.ty(body, tcx).kind() else {
+            continue;
+        };
+        let args = args.skip_binder();
+        let callables = polyasm_witness_callables(tcx, marker, args);
+        let marker_call = callables.iter().any(Option::is_some);
+        for callable in callables.into_iter().flatten() {
+            if let ty::Param(parameter) = *callable.kind() {
+                parameters.insert(parameter.index);
+            }
+        }
+        if marker_call
+            || tcx.is_diagnostic_item(sym::polyasm_require_statement, marker)
+            || marker.is_local()
+            || !has_callable_argument(args)
+        {
+            continue;
+        }
+        for parameter in external_witness_parameters(tcx, marker, visiting) {
+            if let Some(ty::Param(outer)) =
+                args.get(parameter as usize).and_then(|argument| argument.as_type()).map(Ty::kind)
+            {
+                parameters.insert(outer.index);
+            }
+        }
+    }
+    visiting.shift_remove(&def_id);
+    parameters
+}
+
+fn has_callable_argument(args: ty::GenericArgsRef<'_>) -> bool {
+    args.types()
+        .any(|argument| matches!(argument.kind(), ty::FnDef(..) | ty::Closure(..) | ty::Param(..)))
+}
+
+fn record_witness_callable(
+    owner: DefId,
+    callable: Ty<'_>,
+    def_ids: &mut FxIndexSet<DefId>,
+    parameter_witness: &mut FxHashMap<DefId, FxIndexSet<u32>>,
+) -> bool {
+    match *callable.kind() {
+        ty::FnDef(def_id, _) | ty::Closure(def_id, _) => def_ids.insert(def_id),
+        ty::Param(parameter) => parameter_witness.entry(owner).or_default().insert(parameter.index),
+        _ => false,
+    }
+}
+
 fn inline<'tcx, T: Inliner<'tcx>>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) -> bool {
     let def_id = body.source.def_id();
 
@@ -553,6 +900,12 @@ fn resolve_callsite<'tcx, I: Inliner<'tcx>>(
                 .unwrap();
             let mut callee =
                 Instance::try_resolve(tcx, inliner.typing_env(), def_id, args).ok().flatten()?;
+
+            // Trait calls resolve to the concrete callable here. Its PolyASM
+            // placement boundary follows that callable through resolution.
+            if !inliner.should_inline_for_callee(callee.def_id()) {
+                return None;
+            }
 
             if let InstanceKind::Virtual(..) = callee.def {
                 return None;
@@ -777,10 +1130,20 @@ fn check_mir_is_available<'tcx, I: Inliner<'tcx>>(
     if let Some(callee_def_id) = callee_def_id.as_local()
         && !inliner.tcx().is_lang_item(inliner.tcx().parent(caller_def_id), LangItem::FnOnce)
     {
+        // `make_shim` ends the synchronous arm with `run_optimization_passes`,
+        // so the caller is a shim standing for an item of another crate at
+        // times -- `core::ops::function::Fn::call` is the one that reaches here
+        // first -- and `mir_callgraph_cyclic` answers for a local body alone.
+        // Everything available here leaves open whether the callee reaches
+        // back into the shim, so the call stays in place of being inlined on an
+        // unchecked assumption, and a shim caller stays clear of
+        // `expect_local`.
+        let Some(caller_def_id) = caller_def_id.as_local() else {
+            return Err("cycle detection has no answer for a caller from another crate");
+        };
         // If we know for sure that the function we're calling will itself try to
         // call us, then we avoid inlining that function.
-        let Some(cyclic_callees) = inliner.tcx().mir_callgraph_cyclic(caller_def_id.expect_local())
-        else {
+        let Some(cyclic_callees) = inliner.tcx().mir_callgraph_cyclic(caller_def_id) else {
             return Err("call graph cycle detection bailed due to recursion limit");
         };
         if cyclic_callees.contains(&callee_def_id) {
@@ -807,6 +1170,25 @@ fn check_codegen_attributes<'tcx, I: Inliner<'tcx>>(
     callee_attrs: &CodegenFnAttrs,
 ) -> Result<(), &'static str> {
     let tcx = inliner.tcx();
+    if tcx.sess.is_polyasm_target()
+        && tcx.polyasm_witness_def_ids(()).contains(&callsite.callee.def_id())
+        && matches!(callee_attrs.inline, InlineAttr::Force { .. })
+    {
+        return Err("a PolyASM witness callable must remain an independent offload boundary");
+    }
+    if is_polyasm_witness_marker(tcx, callsite.callee.def_id()) {
+        return Err("PolyASM compiler witness marker");
+    }
+    // The `Always` marker relies on an explicitly ordered sysroot byte
+    // conversion at its call boundary, distinct from the native-endian
+    // transmute inside it. Erasing that call would make the same body answer
+    // differently once optimization inlines the helper, so the boundary
+    // survives every profile.
+    if tcx.sess.is_polyasm_target()
+        && tcx.is_polyasm_explicit_endian_helper(callsite.callee.def_id())
+    {
+        return Err("a PolyASM byte-order helper is a trusted warrant boundary");
+    }
     if let InlineAttr::Never = callee_attrs.inline {
         return Err("never inline attribute");
     }

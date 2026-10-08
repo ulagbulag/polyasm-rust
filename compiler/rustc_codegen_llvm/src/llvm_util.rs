@@ -324,6 +324,28 @@ pub(crate) fn to_llvm_features<'a>(target: &Target, s: &'a str) -> Option<LLVMFe
 /// We do not have to worry about RUSTC_SPECIFIC_FEATURES here, those are handled outside codegen.
 pub(crate) fn target_config(sess: &EarlySession) -> TargetConfig {
     require_inited();
+
+    // PolyASM borrows wasm32's data layout so that a module has a data model,
+    // and that layout is all it takes from wasm32: this path emits zero machine
+    // code, and a separate emitter lowers the image from the module's bitcode.
+    // Its `rust_target_features` are WebAssembly's by that same borrowing, and
+    // asking LLVM's wasm subtarget about each of them aborts LLVM on the first
+    // one outside its list. The other backend for this target reports zero
+    // target features, so this reports the same in place of probing a machine
+    // that stays away from the code.
+    if sess.is_polyasm_target() {
+        let mut cfg = TargetConfig {
+            internal_target_features: Default::default(),
+            has_reliable_f16: true,
+            has_reliable_f16_math: true,
+            has_reliable_f16b: true,
+            has_reliable_f128: true,
+            has_reliable_f128_math: true,
+        };
+        update_target_reliable_float_cfg(&sess.target, &mut cfg);
+        return cfg;
+    }
+
     let target_features = global_llvm_features(sess, /* for_cfg */ true);
 
     let triple = SmallCStr::new(&versioned_llvm_target(sess));

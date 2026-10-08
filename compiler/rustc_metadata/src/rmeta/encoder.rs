@@ -1169,7 +1169,14 @@ fn should_encode_mir(
         DefKind::SyntheticCoroutineBody => (false, true),
         // Full-fledged functions + closures
         DefKind::AssocFn | DefKind::Fn | DefKind::Closure => {
+            // A PolyASM `Always` marker is decided on the normalized MIR of the whole call
+            // graph below the marked callable, dependency bodies included, so a body another
+            // crate reaches carries its MIR. Cross-crate inlinability is the only rule that
+            // would keep an ordinary private helper's MIR here, and incremental compilation
+            // and `-Zcross-crate-inline-threshold=never` both turn that inference off, so
+            // this target encodes MIR the way `-Zalways-encode-mir` does.
             let opt = tcx.sess.opts.unstable_opts.always_encode_mir
+                || tcx.sess.is_polyasm_target()
                 || (tcx.sess.opts.output_types.should_codegen()
                     && reachable_set.contains(&def_id)
                     && (tcx.generics_of(def_id).requires_monomorphization(tcx)

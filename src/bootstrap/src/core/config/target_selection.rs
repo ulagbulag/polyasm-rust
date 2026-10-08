@@ -82,6 +82,17 @@ impl TargetSelection {
         self.contains("pauthtest")
     }
 
+    /// Whether this is one of the three built-in PolyASM tuples.
+    ///
+    /// `polyasm-unknown-unknown`, `polyasm32-unknown-unknown` and
+    /// `polyasm64-unknown-unknown` name one architecture at three pointer
+    /// widths. Every bootstrap rule that exists because PolyASM has zero native
+    /// C ABI, is permanently `no_std`, or is linked by Cranelift holds for all
+    /// three, so bootstrap asks this question and compares whole sets of tuples.
+    pub fn is_polyasm(&self) -> bool {
+        build_helper::targets::is_polyasm_target(&self.triple)
+    }
+
     pub fn is_windows(&self) -> bool {
         self.contains("windows")
     }

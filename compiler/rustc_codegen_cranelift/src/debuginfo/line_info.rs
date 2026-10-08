@@ -169,7 +169,9 @@ impl FunctionDebugContext {
         let mcr = context.compiled_code().unwrap();
         for &MachSrcLoc { start, end, loc } in mcr.buffer.get_srclocs_sorted() {
             debug_context.dwarf.unit.line_program.row().address_offset = u64::from(start);
-            if !loc.is_default() {
+            if loc.bits() & 0x8000_0000 != 0 {
+                create_row_for_span(debug_context, self.function_source_loc);
+            } else if !loc.is_default() {
                 let source_loc = self.source_loc_set[loc.bits() as usize];
                 create_row_for_span(debug_context, source_loc);
             } else {

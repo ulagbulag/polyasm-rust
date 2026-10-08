@@ -2,7 +2,6 @@ use std::env;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 fn main() {
     // Only check .git/HEAD dirty status if it exists - doing so when
@@ -39,20 +38,9 @@ fn channel() -> String {
 }
 
 fn commit_hash() -> Option<String> {
-    let output = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .ok()?;
-    let mut stdout = output.status.success().then_some(output.stdout)?;
-    stdout.truncate(10);
-    String::from_utf8(stdout).ok()
+    None
 }
 
 fn commit_date() -> Option<String> {
-    let output = Command::new("git")
-        .args(["log", "-1", "--date=short", "--pretty=format:%cd"])
-        .output()
-        .ok()?;
-    let stdout = output.status.success().then_some(output.stdout)?;
-    String::from_utf8(stdout).ok()
+    None
 }

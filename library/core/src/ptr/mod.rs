@@ -571,7 +571,9 @@ pub const unsafe fn copy_nonoverlapping<T>(src: *const T, dst: *mut T, count: us
 
     // SAFETY: the safety contract for `copy_nonoverlapping` must be
     // upheld by the caller.
-    unsafe { crate::intrinsics::copy_nonoverlapping(src, dst, count) }
+    unsafe {
+        crate::intrinsics::copy_nonoverlapping(src, dst, count);
+    };
 }
 
 /// Copies `count * size_of::<T>()` bytes from `src` to `dst`. The source
@@ -662,7 +664,17 @@ pub const unsafe fn copy<T>(src: *const T, dst: *mut T, count: usize) {
             ub_checks::maybe_is_aligned_and_not_null(src, align, zero_size)
                 && ub_checks::maybe_is_aligned_and_not_null(dst, align, zero_size)
         );
-        crate::intrinsics::copy(src, dst, count)
+        // On PolyASM the overlapping move is one instruction and is named as
+        // one, for the reason `copy_nonoverlapping` names its own.
+        #[cfg(target_abi = "polyasm")]
+        crate::polyasm::intrinsics::memory_move(
+            dst.cast::<u8>(),
+            src.cast::<u8>(),
+            count * size_of::<T>(),
+        );
+
+        #[cfg(not(target_abi = "polyasm"))]
+        crate::intrinsics::copy(src, dst, count);
     }
 }
 
@@ -733,7 +745,13 @@ pub const unsafe fn write_bytes<T>(dst: *mut T, val: u8, count: usize) {
                 zero_size: bool = T::IS_ZST || count == 0,
             ) => ub_checks::maybe_is_aligned_and_not_null(addr, align, zero_size)
         );
-        crate::intrinsics::write_bytes(dst, val, count)
+        // On PolyASM the fill is one instruction and is named as one, for the
+        // reason `copy_nonoverlapping` names its own.
+        #[cfg(target_abi = "polyasm")]
+        crate::polyasm::intrinsics::memory_set(dst.cast::<u8>(), val, count * size_of::<T>());
+
+        #[cfg(not(target_abi = "polyasm"))]
+        crate::intrinsics::write_bytes(dst, val, count);
     }
 }
 

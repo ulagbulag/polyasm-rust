@@ -41,6 +41,13 @@ impl Target {
             }
         }
 
+        if kind == TargetKind::Json {
+            check!(
+                self.cfg_abi != CfgAbi::Polyasm,
+                "`abi = \"polyasm\"` is reserved for rustc's built-in PolyASM target"
+            );
+        }
+
         check_eq!(
             self.is_like_darwin,
             self.vendor == "apple",
@@ -642,7 +649,7 @@ impl Target {
                 check!(self.rustc_abi.is_none(), "`rustc_abi` is unused on wasm");
                 check_matches!(
                     self.cfg_abi,
-                    CfgAbi::Unspecified | CfgAbi::Other(_),
+                    CfgAbi::Polyasm | CfgAbi::Unspecified | CfgAbi::Other(_),
                     "invalid `target_abi` for wasm"
                 );
             }

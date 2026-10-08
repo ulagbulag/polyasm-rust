@@ -30,8 +30,23 @@ const OPTIONAL_COMPONENTS: &[&str] = &[
     "bpf",
 ];
 
-const REQUIRED_COMPONENTS: &[&str] =
-    &["ipo", "bitreader", "bitwriter", "linker", "asmparser", "lto", "coverage", "instrumentation"];
+// `executionengine`, `interpreter`, `mcjit` and `irreader` complete the LLVM C
+// API that the PolyASM lowering `rustc_codegen_llvm` links reaches through
+// inkwell, which binds this LLVM.
+const REQUIRED_COMPONENTS: &[&str] = &[
+    "ipo",
+    "bitreader",
+    "bitwriter",
+    "linker",
+    "asmparser",
+    "lto",
+    "coverage",
+    "instrumentation",
+    "executionengine",
+    "interpreter",
+    "mcjit",
+    "irreader",
+];
 
 fn detect_llvm_link() -> (&'static str, &'static str) {
     // Force the link mode we want, preferring static by default, but

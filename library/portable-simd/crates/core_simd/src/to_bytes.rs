@@ -77,7 +77,7 @@ macro_rules! impl_to_bytes {
 
             #[inline]
             fn to_le_bytes(mut self) -> Self::Bytes {
-                if !cfg!(target_endian = "little") {
+                if !cfg!(any(target_endian = "little", target_abi = "polyasm")) {
                     self = swap_bytes!($ty, self);
                 }
                 self.to_ne_bytes()
@@ -105,7 +105,7 @@ macro_rules! impl_to_bytes {
             #[inline]
             fn from_le_bytes(bytes: Self::Bytes) -> Self {
                 let ret = Self::from_ne_bytes(bytes);
-                if cfg!(target_endian = "little") {
+                if cfg!(any(target_endian = "little", target_abi = "polyasm")) {
                     ret
                 } else {
                     swap_bytes!($ty, ret)

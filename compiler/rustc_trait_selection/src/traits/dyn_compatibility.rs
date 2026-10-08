@@ -599,7 +599,9 @@ fn virtual_call_violations_for_method<'tcx>(
             // allowed to have generic parameters so `auto trait Bound<T> {}`
             // would already have reported an error at the definition of the
             // auto trait.
-            if pred_trait_ref.args.len() != 1 {
+            let compiler_owned_polyasm_always = tcx.sess.is_polyasm_target()
+                && tcx.is_lang_item(pred_trait_ref.def_id, LangItem::PolyasmAlways);
+            if pred_trait_ref.args.len() != 1 && !compiler_owned_polyasm_always {
                 assert!(
                     tcx.dcx().has_errors().is_some(),
                     "auto traits cannot have generic parameters"

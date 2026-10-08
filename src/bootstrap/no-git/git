@@ -1,0 +1,11 @@
+#!/bin/sh
+if [ -n "${POLYASM_GIT_ATTEMPT_LOG:-}" ]; then
+    umask 077
+    {
+        printf 'pid=%s cwd=%s argv=' "$$" "${PWD}"
+        printf '%s ' "$@"
+        printf '\n'
+    } >>"${POLYASM_GIT_ATTEMPT_LOG}"
+fi
+echo 'error: Git execution is disabled by the PolyASM source policy' >&2
+exit 86

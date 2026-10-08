@@ -658,7 +658,7 @@ impl Session {
             LlvmLibunwind::No => false,
         };
 
-        if self.config.backtrace {
+        if self.config.backtrace && !target.is_polyasm() {
             features.insert("backtrace");
         }
 

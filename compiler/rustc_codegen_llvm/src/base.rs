@@ -21,7 +21,9 @@ use rustc_codegen_ssa::traits::*;
 use rustc_data_structures::small_c_str::SmallCStr;
 use rustc_middle::dep_graph;
 use rustc_middle::middle::codegen_fn_attrs::{CodegenFnAttrs, SanitizerFnAttrs};
-use rustc_middle::mono::Visibility;
+use rustc_middle::mono::{
+    MonoItem, Visibility, is_polyasm_entry_instance, is_polyasm_witness_marker,
+};
 use rustc_middle::ty::TyCtxt;
 use rustc_session::config::{DebugInfo, Offload};
 use rustc_span::Symbol;
@@ -113,7 +115,17 @@ pub(crate) fn compile_codegen_unit(
                 cx.offload_globals.replace(Some(OffloadGlobals::declare(&cx)));
             }
 
-            let mono_items = cx.codegen_unit.items_in_deterministic_order(cx.tcx);
+            let mono_items = cx
+                .codegen_unit
+                .items_in_deterministic_order(cx.tcx)
+                .into_iter()
+                .filter(|(item, _)| match item {
+                    MonoItem::Fn(instance) if cx.sess().is_polyasm_target() => {
+                        !is_polyasm_witness_marker(cx.tcx, instance.def_id())
+                    }
+                    MonoItem::Fn(_) | MonoItem::Static(_) | MonoItem::GlobalAsm(_) => true,
+                })
+                .collect::<Vec<_>>();
             for &(mono_item, data) in &mono_items {
                 mono_item.predefine::<Builder<'_, '_, '_>>(
                     &mut cx,
@@ -126,6 +138,11 @@ pub(crate) fn compile_codegen_unit(
             // ... and now that we have everything pre-defined, fill out those definitions.
             for &(mono_item, item_data) in &mono_items {
                 mono_item.define::<Builder<'_, '_, '_>>(&mut cx, cgu_name.as_str(), item_data);
+                if let MonoItem::Fn(instance) = mono_item
+                    && is_polyasm_entry_instance(cx.tcx, instance)
+                {
+                    attributes::preserve_polyasm_callable(&cx, cx.get_fn(instance));
+                }
             }
 
             // If this codegen unit contains the main function, also create the

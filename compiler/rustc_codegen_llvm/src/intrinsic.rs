@@ -215,6 +215,545 @@ impl<'ll, 'tcx> IntrinsicCallBuilderMethods<'tcx> for Builder<'_, 'll, 'tcx> {
                 unsafe { llvm::LLVMRustSetNoSignedZeros(call) };
                 call
             }
+            // Packet operations are effectful compiler intrinsics. In particular, a
+            // failed read terminates the guest invocation even when its answer is
+            // unused. These declarations intentionally keep every memory effect
+            // and leave `nounwind`/`willreturn`/`speculatable` off. The PolyASM
+            // frontend consumes every distinct symbol as its matching opcode.
+            sym::packet_data_load8_abs => {
+                let context = args[0].immediate();
+                let displacement = self.const_i32(fn_args.const_at(0).to_leaf().to_i32());
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i32()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_data_load8_abs",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, displacement],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_data_load8_ind => {
+                let operands = args[0].immediate_or_packed_pair(self);
+                let context = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(0) != Size::ZERO),
+                );
+                let offset = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(1) != Size::ZERO),
+                );
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i64()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_data_load8_ind",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, offset],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_data_load16be_abs => {
+                let context = args[0].immediate();
+                let displacement = self.const_i32(fn_args.const_at(0).to_leaf().to_i32());
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i32()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_data_load16be_abs",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, displacement],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_data_load16be_ind => {
+                let operands = args[0].immediate_or_packed_pair(self);
+                let context = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(0) != Size::ZERO),
+                );
+                let offset = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(1) != Size::ZERO),
+                );
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i64()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_data_load16be_ind",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, offset],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_data_load32be_abs => {
+                let context = args[0].immediate();
+                let displacement = self.const_i32(fn_args.const_at(0).to_leaf().to_i32());
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i32()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_data_load32be_abs",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, displacement],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_data_load32be_ind => {
+                let operands = args[0].immediate_or_packed_pair(self);
+                let context = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(0) != Size::ZERO),
+                );
+                let offset = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(1) != Size::ZERO),
+                );
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i64()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_data_load32be_ind",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, offset],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_mac_load8_abs => {
+                let context = args[0].immediate();
+                let displacement = self.const_i32(fn_args.const_at(0).to_leaf().to_i32());
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i32()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_mac_load8_abs",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, displacement],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_mac_load8_ind => {
+                let operands = args[0].immediate_or_packed_pair(self);
+                let context = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(0) != Size::ZERO),
+                );
+                let offset = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(1) != Size::ZERO),
+                );
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i64()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_mac_load8_ind",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, offset],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_mac_load16be_abs => {
+                let context = args[0].immediate();
+                let displacement = self.const_i32(fn_args.const_at(0).to_leaf().to_i32());
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i32()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_mac_load16be_abs",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, displacement],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_mac_load16be_ind => {
+                let operands = args[0].immediate_or_packed_pair(self);
+                let context = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(0) != Size::ZERO),
+                );
+                let offset = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(1) != Size::ZERO),
+                );
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i64()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_mac_load16be_ind",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, offset],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_mac_load32be_abs => {
+                let context = args[0].immediate();
+                let displacement = self.const_i32(fn_args.const_at(0).to_leaf().to_i32());
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i32()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_mac_load32be_abs",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, displacement],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_mac_load32be_ind => {
+                let operands = args[0].immediate_or_packed_pair(self);
+                let context = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(0) != Size::ZERO),
+                );
+                let offset = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(1) != Size::ZERO),
+                );
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i64()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_mac_load32be_ind",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, offset],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_network_load8_abs => {
+                let context = args[0].immediate();
+                let displacement = self.const_i32(fn_args.const_at(0).to_leaf().to_i32());
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i32()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_network_load8_abs",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, displacement],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_network_load8_ind => {
+                let operands = args[0].immediate_or_packed_pair(self);
+                let context = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(0) != Size::ZERO),
+                );
+                let offset = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(1) != Size::ZERO),
+                );
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i64()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_network_load8_ind",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, offset],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_network_load16be_abs => {
+                let context = args[0].immediate();
+                let displacement = self.const_i32(fn_args.const_at(0).to_leaf().to_i32());
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i32()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_network_load16be_abs",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, displacement],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_network_load16be_ind => {
+                let operands = args[0].immediate_or_packed_pair(self);
+                let context = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(0) != Size::ZERO),
+                );
+                let offset = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(1) != Size::ZERO),
+                );
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i64()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_network_load16be_ind",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, offset],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_network_load32be_abs => {
+                let context = args[0].immediate();
+                let displacement = self.const_i32(fn_args.const_at(0).to_leaf().to_i32());
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i32()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_network_load32be_abs",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, displacement],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_network_load32be_ind => {
+                let operands = args[0].immediate_or_packed_pair(self);
+                let context = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(0) != Size::ZERO),
+                );
+                let offset = self.extract_value(
+                    operands,
+                    u64::from(args[0].layout.fields.offset(1) != Size::ZERO),
+                );
+                let signature =
+                    self.type_func(&[self.type_ptr(), self.type_i64()], self.type_i64());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_network_load32be_ind",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context, offset],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_data_range => {
+                let named_field = |layout: ty::layout::TyAndLayout<'tcx>, name: &str| {
+                    let ty::Adt(definition, _) = layout.ty.kind() else {
+                        span_bug!(span, "PolyASM packet operands are not a named struct");
+                    };
+                    definition
+                        .non_enum_variant()
+                        .fields
+                        .iter_enumerated()
+                        .find(|(_, field)| field.name.as_str() == name)
+                        .map(|(index, _)| index.as_usize())
+                        .unwrap_or_else(|| {
+                            span_bug!(span, "PolyASM packet operands have no `{name}` field")
+                        })
+                };
+                // Keep the named Rust fields apart from scalar-pair ABI order
+                // and project them through the evaluated layout, including
+                // when `-Zrandomize-layout` swaps the two packet pointers.
+                // LLVM's ordinary mem2reg pass forwards the temporary and keeps
+                // either pointer's provenance.
+                let operands = PlaceRef::alloca(self, args[0].layout);
+                args[0].store_with_annotation(self, operands);
+                let window = operands.project_field(self, named_field(args[0].layout, "window"));
+                let start_place = window.project_field(self, named_field(window.layout, "start"));
+                let end_place = window.project_field(self, named_field(window.layout, "end"));
+                let start = self.load_operand(start_place).immediate();
+                let end = self.load_operand(end_place).immediate();
+                let length = fn_args
+                    .const_at(0)
+                    .try_to_target_usize(self.tcx)
+                    .expect("expected monomorphic packet range length in codegen");
+                let Ok(length) = u32::try_from(length) else {
+                    self.tcx.dcx().span_fatal(
+                        span,
+                        "packet range length exceeds the instruction's u32 immediate",
+                    );
+                };
+                let length = self.const_uint(self.type_i32(), u64::from(length));
+                let signature = self.type_func(
+                    &[self.type_ptr(), self.type_ptr(), self.type_i32()],
+                    self.type_i1(),
+                );
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_data_range",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[start, end, length],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_data_start => {
+                let context = args[0].immediate();
+                let signature = self.type_func(&[self.type_ptr()], self.type_ptr());
+                let intrinsic = self.declare_cfn(
+                    "__polyasm_packet_data_start",
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context],
+                    None,
+                    None,
+                )
+            }
+            sym::packet_data_end => {
+                let context = args[0].immediate();
+                let signature = self.type_func(&[self.type_ptr()], self.type_ptr());
+                let intrinsic =
+                    self.declare_cfn("__polyasm_packet_data_end", llvm::UnnamedAddr::No, signature);
+                self.call(
+                    signature,
+                    None,
+                    None,
+                    intrinsic,
+                    ReturnSlot::Direct,
+                    &[context],
+                    None,
+                    None,
+                )
+            }
             sym::ptr_mask => {
                 let ptr = args[0].immediate();
                 self.call_intrinsic(
@@ -647,6 +1186,83 @@ impl<'ll, 'tcx> IntrinsicCallBuilderMethods<'tcx> for Builder<'_, 'll, 'tcx> {
                 // This `unwrap` is justified by `intrinsic_call_expects_place_always` declaring
                 // this intrinsic as always needing a return place.
                 let result = PlaceRef { val: result_place.unwrap(), layout: result_layout };
+                if self.cx().sess().target.arch == Arch::Polyasm {
+                    match (args[0].layout.backend_repr, args[0].val) {
+                        (BackendRepr::Scalar(scalar), OperandValue::Immediate(input))
+                            if !matches!(scalar.primitive(), Primitive::Float(_)) =>
+                        {
+                            let output_type = self.val_ty(input);
+                            let output = crate::asm::inline_asm_call(
+                                self,
+                                "",
+                                "=r,0,~{memory}",
+                                &[input],
+                                output_type,
+                                &[],
+                                true,
+                                false,
+                                llvm::AsmDialect::Att,
+                                &[span],
+                                false,
+                                None,
+                                None,
+                            )
+                            .unwrap_or_else(|| {
+                                bug!("failed to generate inline asm call for `black_box`")
+                            });
+                            OperandValue::Immediate(output).store(self, result);
+                            return IntrinsicResult::WroteIntoPlace;
+                        }
+                        (
+                            BackendRepr::ScalarPair { a: first, b: second, b_offset: _ },
+                            OperandValue::Pair(first_input, second_input),
+                        ) if !matches!(first.primitive(), Primitive::Float(_))
+                            && !matches!(second.primitive(), Primitive::Float(_)) =>
+                        {
+                            let first_output_type = self.val_ty(first_input);
+                            let first_output = crate::asm::inline_asm_call(
+                                self,
+                                "",
+                                "=r,0,~{memory}",
+                                &[first_input],
+                                first_output_type,
+                                &[],
+                                true,
+                                false,
+                                llvm::AsmDialect::Att,
+                                &[span],
+                                false,
+                                None,
+                                None,
+                            )
+                            .unwrap_or_else(|| {
+                                bug!("failed to generate inline asm call for `black_box`")
+                            });
+                            let second_output_type = self.val_ty(second_input);
+                            let second_output = crate::asm::inline_asm_call(
+                                self,
+                                "",
+                                "=r,0,~{memory}",
+                                &[second_input],
+                                second_output_type,
+                                &[],
+                                true,
+                                false,
+                                llvm::AsmDialect::Att,
+                                &[span],
+                                false,
+                                None,
+                                None,
+                            )
+                            .unwrap_or_else(|| {
+                                bug!("failed to generate inline asm call for `black_box`")
+                            });
+                            OperandValue::Pair(first_output, second_output).store(self, result);
+                            return IntrinsicResult::WroteIntoPlace;
+                        }
+                        _ => {}
+                    }
+                }
                 args[0].val.store(self, result);
                 self.black_box(result, span);
 
@@ -888,6 +1504,85 @@ impl<'ll, 'tcx> IntrinsicCallBuilderMethods<'tcx> for Builder<'_, 'll, 'tcx> {
                         self.call_intrinsic("llvm.returnaddress", type_params, &[val])
                     }
                 }
+            }
+
+            // PolyASM's counted runs reach LLVM's own run intrinsics, which the
+            // PolyASM frontend reads as the rows they are.
+            sym::memory_move if self.sess().is_polyasm_target() => {
+                self.memmove(
+                    args[0].immediate(),
+                    Align::ONE,
+                    args[1].immediate(),
+                    Align::ONE,
+                    args[2].immediate(),
+                    rustc_codegen_ssa::MemFlags::empty(),
+                );
+                return IntrinsicResult::Operand(OperandValue::ZeroSized);
+            }
+            sym::memory_set if self.sess().is_polyasm_target() => {
+                self.memset(
+                    args[0].immediate(),
+                    args[1].immediate(),
+                    args[2].immediate(),
+                    Align::ONE,
+                    rustc_codegen_ssa::MemFlags::empty(),
+                );
+                return IntrinsicResult::Operand(OperandValue::ZeroSized);
+            }
+            sym::memory_compare if self.sess().is_polyasm_target() => {
+                let cmp = self.call_intrinsic(
+                    "memcmp",
+                    &[],
+                    &[args[0].immediate(), args[1].immediate(), args[2].immediate()],
+                );
+                self.sext(cmp, self.type_ix(32))
+            }
+            // Every other PolyASM instruction is one call of the symbol its
+            // name spells, over exactly the operands it declares. An
+            // instruction whose intrinsic carries a body passes that body as
+            // its last operand: the row's record, the portable answer a
+            // machine enters where it carries the row elsewhere. The PolyASM
+            // frontend reads the call as the row.
+            _ if self.sess().is_polyasm_target()
+                && rustc_codegen_ssa::polyasm::instruction(tcx, instance.def_id()) =>
+            {
+                let definition = tcx.intrinsic(instance.def_id()).unwrap();
+                let mut types = Vec::with_capacity(args.len() + 1);
+                let mut values = Vec::with_capacity(args.len() + 1);
+                for argument in args {
+                    types.push(argument.layout.immediate_llvm_type(self.cx));
+                    values.push(argument.immediate());
+                }
+                if !definition.must_be_overridden {
+                    let fallback = ty::Instance::new_raw(instance.def_id(), instance.args);
+                    types.push(self.type_ptr());
+                    values.push(self.cx.get_fn_addr(fallback, None));
+                }
+                let answer = if result_layout.is_zst() {
+                    self.type_void()
+                } else {
+                    result_layout.immediate_llvm_type(self.cx)
+                };
+                let signature = self.type_func(&types, answer);
+                let callee = self.declare_cfn(
+                    &rustc_codegen_ssa::polyasm::instruction_symbol(tcx, instance.def_id()),
+                    llvm::UnnamedAddr::No,
+                    signature,
+                );
+                let call = self.call(
+                    signature,
+                    None,
+                    None,
+                    callee,
+                    ReturnSlot::Direct,
+                    &values,
+                    None,
+                    None,
+                );
+                if result_layout.is_zst() {
+                    return IntrinsicResult::Operand(OperandValue::ZeroSized);
+                }
+                call
             }
 
             _ => {
@@ -2040,6 +2735,21 @@ fn get_args_from_tuple<'ll, 'tcx>(
     }
 }
 
+/// How many lanes one dynamic byte shuffle reaches across.
+///
+/// Sixteen, because that is the block every byte-shuffle unit answers within
+/// and the width `simd_swizzle_dyn` is defined against; a wider vector is a
+/// row of such blocks and an index stays within the one it was read from.
+const SWIZZLE_BLOCK_LANES: u64 = 16;
+
+/// How many bits a scalar shift amount arrives in.
+///
+/// `simd_shl_scalar` and `simd_shr_scalar` take a `u32`, so a lane narrower
+/// than this truncates the amount and a wider one zero-extends it. The same
+/// width answers for a swizzle index, which is read out of a lane and used to
+/// address one.
+const SHIFT_AMOUNT_BITS: u64 = 32;
+
 fn generic_simd_intrinsic<'ll, 'tcx>(
     bx: &mut Builder<'_, 'll, 'tcx>,
     name: Symbol,
@@ -2206,6 +2916,28 @@ fn generic_simd_intrinsic<'ll, 'tcx>(
         return Ok(splat);
     }
 
+    if name == sym::simd_load_unaligned {
+        // `simd_load_unaligned(pointer) -> vector` names the pointer first, so
+        // it is answered here rather than below, where every remaining
+        // intrinsic is required to take a vector in `args[0]`. The element
+        // type the pointer names stays apart from the vector's lanes -- a
+        // byte pointer is what the callers hand over -- so the return type is
+        // the only one examined, and the whole vector is one unaligned read.
+        let _ = require_simd!(ret_ty, SimdReturn);
+
+        return Ok(bx.load(llret_ty, args[0].immediate(), Align::ONE));
+    }
+
+    if name == sym::simd_store_unaligned {
+        // The mirror of the load: the pointer stands first and the vector
+        // second, and the whole vector is one unaligned write. The intrinsic
+        // answers unit, and the store instruction is what the other storing
+        // intrinsics here hand back for that.
+        let _ = require_simd!(args[1].layout.ty, SimdArgument);
+
+        return Ok(bx.store(args[1].immediate(), args[0].immediate(), Align::ONE));
+    }
+
     let supports_scalable = match name {
         sym::simd_cast | sym::simd_select => true,
         _ => false,
@@ -2220,6 +2952,113 @@ fn generic_simd_intrinsic<'ll, 'tcx>(
     }
     let (in_len, in_elem, in_num_vecs) = require_simd_or_scalable!(args[0].layout.ty, SimdInput);
     let in_ty = args[0].layout.ty;
+
+    if name == sym::simd_shl_scalar || name == sym::simd_shr_scalar {
+        // One amount shifts every lane. It arrives as a `u32` because that is
+        // what a caller holds, so it is brought to the lane's own width and
+        // splatted: naming the shift once over the whole vector is what lets a
+        // backend pick its vector shift rather than read an amount out of
+        // every lane. A signed element shifts arithmetically to the right,
+        // which is the only place the two directions part.
+        let elem_bitwidth = require_int_or_uint_ty!(
+            in_elem.kind(),
+            InvalidMonomorphization::UnsupportedOperation { span, name, in_ty, in_elem }
+        );
+
+        let elem_ty = bx.type_ix(elem_bitwidth);
+        let amount = args[1].immediate();
+        let amount = match elem_bitwidth.cmp(&SHIFT_AMOUNT_BITS) {
+            Ordering::Less => bx.trunc(amount, elem_ty),
+            Ordering::Equal => amount,
+            Ordering::Greater => bx.zext(amount, elem_ty),
+        };
+
+        let poison = bx.const_poison(llret_ty);
+        let first = bx.insert_element(poison, amount, bx.const_i32(0));
+        let mask_ty = bx.type_vector(bx.type_i32(), in_len);
+        let amounts = bx.shuffle_vector(first, poison, bx.const_null(mask_ty));
+
+        let value = args[0].immediate();
+        return Ok(match (name, in_elem.kind()) {
+            (sym::simd_shl_scalar, _) => bx.shl(value, amounts),
+            (_, ty::Uint(_)) => bx.lshr(value, amounts),
+            (_, _) => bx.ashr(value, amounts),
+        });
+    }
+
+    if name == sym::simd_swizzle_dyn {
+        // Every output lane takes the table lane its index names, counted
+        // inside that lane's own block of sixteen, and answers zero when the
+        // index leaves the block. That is what a byte-shuffle unit does, and
+        // spelling it lane by lane is what keeps the meaning the same on a
+        // machine that lacks such a unit; where one stands, this folds back into it.
+        let (out_len, out_elem) = require_simd!(ret_ty, SimdReturn);
+        require!(
+            in_len == out_len,
+            InvalidMonomorphization::ReturnLengthInputType {
+                span,
+                name,
+                in_len,
+                in_ty,
+                ret_ty,
+                out_len
+            }
+        );
+        require!(
+            in_elem == out_elem,
+            InvalidMonomorphization::ReturnElement {
+                span,
+                name,
+                in_elem,
+                in_ty,
+                ret_ty,
+                out_ty: out_elem
+            }
+        );
+        let (index_len, _) = require_simd!(args[1].layout.ty, SimdSecond);
+        require!(
+            in_len == index_len,
+            InvalidMonomorphization::SecondArgumentLength {
+                span,
+                name,
+                in_len,
+                in_ty,
+                arg_ty: args[1].layout.ty,
+                out_len: index_len
+            }
+        );
+        let elem_bitwidth = require_int_or_uint_ty!(
+            in_elem.kind(),
+            InvalidMonomorphization::UnsupportedOperation { span, name, in_ty, in_elem }
+        );
+
+        let table = args[0].immediate();
+        let indices = args[1].immediate();
+        let elem_ty = bx.type_ix(elem_bitwidth);
+        let lane_ty = bx.type_i32();
+        let block = in_len.min(SWIZZLE_BLOCK_LANES);
+        let zero = bx.cx.const_null(elem_ty);
+        let limit = bx.cx.const_uint(elem_ty, SWIZZLE_BLOCK_LANES);
+        let inside = bx.cx.const_uint(elem_ty, SWIZZLE_BLOCK_LANES - 1);
+        let mut swizzled = bx.const_poison(llret_ty);
+        for lane in 0..in_len {
+            let base = bx.cx.const_uint(lane_ty, lane / block * block);
+            let place = bx.cx.const_uint(lane_ty, lane);
+            let index = bx.extract_element(indices, place);
+            let outside = bx.icmp(IntPredicate::IntUGE, index, limit);
+            let selected = bx.and(index, inside);
+            let selected = match elem_bitwidth.cmp(&SHIFT_AMOUNT_BITS) {
+                Ordering::Less => bx.zext(selected, lane_ty),
+                Ordering::Equal => selected,
+                Ordering::Greater => bx.trunc(selected, lane_ty),
+            };
+            let position = bx.add(selected, base);
+            let taken = bx.extract_element(table, position);
+            let taken = bx.select(outside, zero, taken);
+            swizzled = bx.insert_element(swizzled, taken, place);
+        }
+        return Ok(swizzled);
+    }
 
     let comparison = match name {
         sym::simd_eq => Some(BinOp::Eq),
@@ -2364,7 +3203,7 @@ fn generic_simd_intrinsic<'ll, 'tcx>(
             let idx = bx
                 .const_to_opt_u128(args[1].immediate(), false)
                 .expect("typeck should have ensure that this is a const");
-            if idx >= in_len.into() {
+            if idx >= u128::from(in_len) {
                 return_error!(InvalidMonomorphization::SimdIndexOutOfBounds {
                     span,
                     name,
@@ -2388,7 +3227,7 @@ fn generic_simd_intrinsic<'ll, 'tcx>(
             let idx = bx
                 .const_to_opt_u128(args[1].immediate(), false)
                 .expect("typeck should have ensure that this is a const");
-            if idx >= in_len.into() {
+            if idx >= u128::from(in_len) {
                 return_error!(InvalidMonomorphization::SimdIndexOutOfBounds {
                     span,
                     name,

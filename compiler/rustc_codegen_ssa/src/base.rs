@@ -682,7 +682,7 @@ pub fn allocator_kind_for_codegen(tcx: TyCtxt<'_>) -> Option<AllocatorKind> {
 /// Decide if this particular crate type needs an allocator shim linked in.
 /// This may return true even when allocator_kind_for_codegen returns false. In
 /// this case no allocator shim shall be linked.
-pub(crate) fn needs_allocator_shim_for_linking(
+pub fn needs_allocator_shim_for_linking(
     dependency_formats: &Dependencies,
     crate_type: CrateType,
 ) -> bool {

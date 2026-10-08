@@ -22,7 +22,9 @@ use tracing::span;
 use crate::core::backend::CodegenBackendKind;
 use crate::core::build_steps::gcc::{Gcc, GccOutput, GccTargetPair};
 use crate::core::build_steps::llvm::{LlvmFromCi, LlvmKind, prebuilt_llvm_output};
-use crate::core::build_steps::tool::{RustcPrivateCompilers, SourceType, copy_lld_artifacts};
+use crate::core::build_steps::tool::{
+    Cargo as CargoTool, RustcPrivateCompilers, SourceType, copy_lld_artifacts,
+};
 use crate::core::build_steps::{dist, llvm};
 use crate::core::builder::{
     self, Builder, Cargo, CommandLineStep, Kind, RunConfig, ShouldRun, Step, StepMetadata,
@@ -524,6 +526,15 @@ pub fn std_cargo(
     cargo: &mut Cargo,
     crates: &[String],
 ) {
+    if target.is_polyasm() {
+        // The compiler's default backend follows its host configuration.
+        // Build PolyASM libraries with the backend configured for their target.
+        cargo.rustflag(&format!(
+            "-Zcodegen-backend={}",
+            builder.config.default_codegen_backend(target).name()
+        ));
+    }
+
     // rustc already ensures that it builds with the minimum deployment
     // target, so ideally we shouldn't need to do anything here.
     //
@@ -1217,6 +1228,11 @@ pub fn rustc_cargo(
         .arg(builder.rustc_features(kind, target, crates))
         .arg("--manifest-path")
         .arg(builder.src.join("compiler/rustc/Cargo.toml"));
+    // `rustc_codegen_llvm` links the PolyASM lowering, a crate of the
+    // workspace that vendors this compiler, and that workspace states its
+    // nightly as `rust-version`; the build compiler builds it under
+    // `RUSTC_BOOTSTRAP`, as it builds the compiler itself.
+    cargo.arg("--ignore-rust-version");
 
     cargo.rustdocflag("-Zcrate-attr=warn(rust_2018_idioms)");
 
@@ -1795,6 +1811,18 @@ impl CommandLineStep for CraneliftCodegenBackend {
         cargo
             .arg("--manifest-path")
             .arg(builder.src.join("compiler/rustc_codegen_cranelift/Cargo.toml"));
+        // The PolyASM interchange link is the Cranelift frontend crate of the
+        // workspace that vendors this compiler, and that workspace states its
+        // nightly as `rust-version`. The build compiler builds the crate and
+        // its path dependencies under `RUSTC_BOOTSTRAP`, as it builds the
+        // compiler itself.
+        cargo.arg("--ignore-rust-version");
+        if !builder.config.llvm_enabled(target) {
+            // Cranelift normally asks rustc's LLVM backend to assemble global
+            // assembly. A Cranelift-only compiler carries Cranelift alone, so it
+            // uses the target assembler directly.
+            cargo.env("CG_CLIF_FORCE_GNU_AS", "1");
+        }
         apply_dylib_lto(builder, &build_compiler, &mut cargo);
         apply_pgo(builder, &mut cargo, build_compiler, &builder.config.cranelift_pgo);
 
@@ -2564,8 +2592,26 @@ impl CommandLineStep for Assemble {
         debug!(src = ?rustc, dst = ?compiler, "linking compiler binary itself");
         builder.copy_link(&rustc, &compiler, FileType::Executable);
 
+        if needs_polyasm_cargo(&builder.targets) {
+            // Cargo is part of a usable Rust toolchain, apart from any
+            // repository-local wrapper. Install the compiler-owned Cargo built
+            // by the preceding bootstrap stage into this compiler's sysroot
+            // while the sysroot is assembled, so later PolyASM bootstrap
+            // invocations keep it.
+            let cargo = builder.ensure(CargoTool::from_build_compiler(build_compiler, host));
+            builder.copy_link(
+                &cargo.tool_path,
+                &sysroot.join("bin").join(exe("cargo", host)),
+                FileType::Executable,
+            );
+        }
+
         target_compiler
     }
+}
+
+pub(crate) fn needs_polyasm_cargo(targets: &[TargetSelection]) -> bool {
+    targets.iter().any(|target| target.is_polyasm())
 }
 
 /// Link some files into a rustc sysroot.

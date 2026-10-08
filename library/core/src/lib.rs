@@ -312,6 +312,8 @@ pub mod panicking;
 #[unstable(feature = "pattern_type_macro", issue = "123646")]
 pub mod pat;
 pub mod pin;
+#[stable(feature = "polyasm_explicit_endian", since = "CURRENT_RUSTC_VERSION")]
+pub mod polyasm;
 #[unstable(feature = "abort_immediate", issue = "154601")]
 pub mod process;
 #[unstable(feature = "random", issue = "130703")]

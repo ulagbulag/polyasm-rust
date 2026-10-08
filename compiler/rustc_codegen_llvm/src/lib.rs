@@ -36,6 +36,8 @@ mod llvm;
 mod llvm_util;
 mod macros;
 mod mono_item;
+mod packet;
+mod polyasm;
 mod type_;
 mod type_of;
 mod typetree;

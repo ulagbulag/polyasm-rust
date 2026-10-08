@@ -99,6 +99,9 @@ pub fn encode_and_write_metadata(tcx: TyCtxt<'_>) -> Result<EncodedMetadata, Err
                 metadata_filename
             }
         };
+        // A dependent crate reads the metadata of its own width, so the
+        // companion of a width-unfixed PolyASM crate finishes first.
+        rustc_session::polyasm::join(tcx.sess);
         if tcx.sess.opts.json_artifact_notifications {
             tcx.dcx().emit_artifact_notification(out_filename.as_path(), "metadata");
         }

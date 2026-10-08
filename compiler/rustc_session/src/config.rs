@@ -30,8 +30,8 @@ use rustc_span::{
 };
 use rustc_structures::CrateType;
 use rustc_target::spec::{
-    FramePointer, LinkSelfContainedComponents, LinkerFeatures, PanicStrategy, SplitDebuginfo,
-    Target, TargetTuple,
+    FramePointer, LinkSelfContainedComponents, LinkerFeatures, POLYASM_TARGET_TUPLES,
+    PanicStrategy, SplitDebuginfo, Target, TargetTuple,
 };
 use tracing::debug;
 
@@ -2885,6 +2885,19 @@ pub fn build_session_options(
     }
 
     let target_triple = parse_target_triple(early_dcx, matches);
+
+    // The trait selection context the coherence-only solver configuration
+    // keeps selects PolyASM's compiler-derived `Always` markers, so a PolyASM
+    // session takes that configuration whenever the command line leaves it open.
+    // An explicit `-Znext-solver=globally` reaches the session check, which
+    // stops it.
+    if let TargetTuple::TargetTuple(tuple) = &target_triple
+        && POLYASM_TARGET_TUPLES.contains(&tuple.as_str())
+        && !unstable_opts.assumptions_on_binders
+        && !matches.opt_strs("Z").iter().any(|arg| arg.starts_with("next-solver"))
+    {
+        unstable_opts.next_solver = NextSolverConfig::Coherence;
+    }
 
     // Ensure `-Z unstable-options` is required when using the unstable `-C link-self-contained` and
     // `-C linker-flavor` options.

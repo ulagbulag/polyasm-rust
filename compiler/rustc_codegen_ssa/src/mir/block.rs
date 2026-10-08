@@ -10,14 +10,17 @@ use rustc_ast::{InlineAsmOptions, InlineAsmTemplatePiece};
 use rustc_attr_ir::AttributeKind;
 use rustc_attr_ir::lang_items::LangItem;
 use rustc_data_structures::packed::Pu128;
+use rustc_hir::def::DefKind;
 use rustc_lint_defs::builtin::TAIL_CALL_TRACK_CALLER;
 use rustc_middle::mir::interpret::{CTFE_ALLOC_SALT, Scalar};
 use rustc_middle::mir::{self, AssertKind, InlineAsmMacro, SwitchTargets, UnwindTerminateReason};
+use rustc_middle::mono::resolve_polyasm_callable;
+use rustc_middle::ty::consts::ConstExt;
 use rustc_middle::ty::layout::{HasTyCtxt, LayoutOf, TyAndLayout, ValidityRequirement};
 use rustc_middle::ty::print::{with_no_trimmed_paths, with_no_visible_paths};
-use rustc_middle::ty::{self, Instance, Ty, TypeVisitableExt};
+use rustc_middle::ty::{self, Instance, Ty, TyCtxt, TypeVisitableExt};
 use rustc_session::config::OptLevel;
-use rustc_span::{Span, Spanned, bug, span_bug};
+use rustc_span::{Span, Spanned, Symbol, bug, span_bug, sym};
 use rustc_target::callconv::{ArgAbi, ArgAttributes, CastTarget, FnAbi, IndirectMode, PassMode};
 use tracing::{debug, info};
 
@@ -29,6 +32,10 @@ use crate::base::{self, is_call_from_compiler_builtins_to_upstream_monomorphizat
 use crate::common::{self, IntPredicate};
 use crate::diagnostics::CompilerBuiltinsCannotCall;
 use crate::mir::IntrinsicResult;
+use crate::polyasm::{
+    normalized_polyasm_static_schedule, polyasm_static_callable_selection,
+    polyasm_static_callable_selection_on, polyasm_static_clock_hz,
+};
 use crate::traits::*;
 use crate::{MemFlags, meth};
 
@@ -49,6 +56,14 @@ enum CallKind {
     Tail,
 }
 
+fn polyasm_u64_const<'tcx>(tcx: TyCtxt<'tcx>, constant: ty::Const<'tcx>) -> Option<u64> {
+    let value = constant.try_to_value()?;
+    if value.ty != tcx.types.u64 {
+        return None;
+    }
+    value.try_to_bits(tcx, ty::TypingEnv::fully_monomorphized())?.try_into().ok()
+}
+
 /// Used by `FunctionCx::codegen_terminator` for emitting common patterns
 /// e.g., creating a basic block, calling a function, etc.
 struct TerminatorCodegenHelper<'tcx> {
@@ -57,6 +72,114 @@ struct TerminatorCodegenHelper<'tcx> {
 }
 
 impl<'a, 'tcx> TerminatorCodegenHelper<'tcx> {
+    /// Carries placement types along the callable returned by a MIR marker.
+    fn polyasm_call_request<Bx: BuilderMethods<'a, 'tcx>>(
+        &self,
+        fx: &FunctionCx<'a, 'tcx, Bx>,
+        instance: Option<Instance<'tcx>>,
+    ) -> Option<(Symbol, Symbol)> {
+        let tcx = fx.cx.tcx();
+        if !tcx.sess.is_polyasm_target() {
+            return None;
+        }
+        let instance = instance?;
+        let (func, args, fn_span) = match &self.terminator.kind {
+            mir::TerminatorKind::Call { func, args, fn_span, .. }
+            | mir::TerminatorKind::TailCall { func, args, fn_span } => (func, args, *fn_span),
+            _ => return None,
+        };
+        let (callable, receiver) = match instance.def {
+            ty::InstanceKind::Shim(ty::ShimKind::FnPtr(_, callable)) => {
+                (resolve_polyasm_callable(tcx, callable, fn_span)?, true)
+            }
+            ty::InstanceKind::Shim(ty::ShimKind::ClosureOnce { .. }) => {
+                (resolve_polyasm_callable(tcx, instance.args.type_at(0), fn_span)?, true)
+            }
+            _ => (instance, tcx.def_kind(instance.def_id()) == DefKind::Closure),
+        };
+        let place = if receiver { args.first()?.node.place() } else { func.place() };
+        let diagnostic = |ty: Ty<'tcx>| {
+            let ty::Adt(definition, _) = ty.kind() else {
+                tcx.dcx().fatal("PolyASM placement requires a property and architecture type")
+            };
+            tcx.get_diagnostic_name(definition.did()).unwrap_or_else(|| {
+                tcx.dcx().fatal("PolyASM placement type requires its diagnostic item")
+            })
+        };
+        let mut pending = vec![(self.bb, place)];
+        let mut visited = Vec::new();
+        let mut request = None;
+        while let Some((block, mut place)) = pending.pop() {
+            if visited.contains(&(block, place)) {
+                continue;
+            }
+            visited.push((block, place));
+            for statement in fx.mir[block].statements.iter().rev() {
+                let mir::StatementKind::Assign(assignment) = &statement.kind else {
+                    continue;
+                };
+                let (destination, value) = &**assignment;
+                if place != Some(*destination) {
+                    continue;
+                }
+                place = match value {
+                    mir::Rvalue::Use(operand, _) => operand.place(),
+                    mir::Rvalue::Ref(_, _, source) | mir::Rvalue::CopyForDeref(source) => {
+                        Some(*source)
+                    }
+                    _ => return None,
+                };
+            }
+            let predecessors = &fx.mir.basic_blocks.predecessors()[block];
+            if predecessors.is_empty() {
+                return None;
+            }
+            for &predecessor in predecessors {
+                let terminator = fx.mir[predecessor].terminator();
+                if let mir::TerminatorKind::Call { func, destination, target, .. } =
+                    &terminator.kind
+                {
+                    if *target != Some(block) {
+                        continue;
+                    }
+                    if let Some((definition, arguments)) = func.const_fn_def()
+                        && (tcx.is_diagnostic_item(sym::polyasm_offload, definition)
+                            || tcx.is_diagnostic_item(sym::polyasm_request_offload, definition))
+                    {
+                        let arguments = fx.monomorphize(arguments);
+                        let marked = resolve_polyasm_callable(
+                            tcx,
+                            arguments.type_at(2),
+                            terminator.source_info.span,
+                        );
+                        // MIR replaces a zero-sized function-item temporary
+                        // with a constant at times. Its callee expression span
+                        // retains the marker while argument expressions keep theirs.
+                        let feeds_call = place == Some(*destination)
+                            || (place.is_none() && fn_span.contains(terminator.source_info.span));
+                        if marked == Some(callable) && feeds_call {
+                            let next = (
+                                diagnostic(arguments.type_at(0)),
+                                diagnostic(arguments.type_at(1)),
+                            );
+                            if request.is_some_and(|previous| previous != next) {
+                                tcx.dcx()
+                                    .fatal("PolyASM call receives multiple placement requests");
+                            }
+                            request = Some(next);
+                            continue;
+                        }
+                    }
+                    if place == Some(*destination) {
+                        return None;
+                    }
+                }
+                pending.push((predecessor, place));
+            }
+        }
+        request
+    }
+
     /// Returns the appropriate `Funclet` for the current funclet, if on MSVC,
     /// either already previously cached, or newly created, by `landing_pad_for`.
     fn funclet<'b, Bx: BuilderMethods<'a, 'tcx>>(
@@ -183,6 +306,7 @@ impl<'a, 'tcx> TerminatorCodegenHelper<'tcx> {
         mergeable_succ: bool,
     ) -> MergingSucc {
         let tcx = bx.tcx();
+        let polyasm_request = self.polyasm_call_request(fx, instance);
         if let Some(instance) = instance
             && is_call_from_compiler_builtins_to_upstream_monomorphization(tcx, instance)
         {
@@ -285,6 +409,14 @@ impl<'a, 'tcx> TerminatorCodegenHelper<'tcx> {
                 self.funclet(fx),
                 instance,
             );
+            if let Some((property, architecture)) = polyasm_request {
+                bx.request_polyasm_call(
+                    invokeret,
+                    fn_ptr,
+                    property.as_str(),
+                    architecture.as_str(),
+                );
+            }
             if fx.mir[self.bb].is_cleanup {
                 bx.apply_attrs_to_cleanup_callsite(invokeret);
             }
@@ -315,6 +447,9 @@ impl<'a, 'tcx> TerminatorCodegenHelper<'tcx> {
                 self.funclet(fx),
                 instance,
             );
+            if let Some((property, architecture)) = polyasm_request {
+                bx.request_polyasm_call(llret, fn_ptr, property.as_str(), architecture.as_str());
+            }
             if fx.mir[self.bb].is_cleanup {
                 bx.apply_attrs_to_cleanup_callsite(llret);
             }
@@ -956,6 +1091,538 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         ))
     }
 
+    fn codegen_polyasm_abort(
+        &mut self,
+        bx: &mut Bx,
+        destination: mir::Place<'tcx>,
+        span: Span,
+        message: impl Into<rustc_errors::DiagMessage>,
+    ) -> MergingSucc {
+        bx.tcx().dcx().span_err(span, message);
+        // Code generation still visits MIR successors after reporting an
+        // error. Define only this call's pending destination: poisoning every
+        // pending SSA local would steal definitions from unrelated blocks.
+        if let Some(local) = destination.as_local()
+            && matches!(self.locals[local], LocalRef::PendingOperand)
+        {
+            let layout = self.cx.layout_of(self.monomorphize(self.mir.local_decls[local].ty));
+            let operand =
+                OperandRef { val: OperandValue::poison(bx, layout), layout, move_annotation: None };
+            self.overwrite_local(local, LocalRef::Operand(operand));
+        }
+        bx.abort_immediate();
+        bx.unreachable();
+        MergingSucc::False
+    }
+
+    fn finish_polyasm_marker(
+        &mut self,
+        helper: &TerminatorCodegenHelper<'tcx>,
+        bx: &mut Bx,
+        target: Option<mir::BasicBlock>,
+        mergeable_succ: bool,
+    ) -> MergingSucc {
+        match target {
+            Some(target) => helper.funclet_br(self, bx, target, mergeable_succ, &[]),
+            None => {
+                bx.unreachable();
+                MergingSucc::False
+            }
+        }
+    }
+
+    fn store_polyasm_marker_result(
+        &mut self,
+        bx: &mut Bx,
+        destination: mir::Place<'tcx>,
+        operand: OperandRef<'tcx, Bx::Value>,
+        span: Span,
+    ) -> bool {
+        if let Some(local) = destination.as_local() {
+            match self.locals[local] {
+                LocalRef::Place(place) => operand.store_with_annotation(bx, place),
+                LocalRef::PendingOperand => {
+                    self.overwrite_local(local, LocalRef::Operand(operand));
+                    self.debug_introduce_local(bx, local);
+                }
+                LocalRef::Operand(previous)
+                    if previous.layout.is_zst() && operand.layout.is_zst() => {}
+                LocalRef::Operand(_) => {
+                    bx.tcx().dcx().span_err(
+                        span,
+                        "PolyASM compiler marker destination was already initialized",
+                    );
+                    return false;
+                }
+                LocalRef::UnsizedPlace(_) => {
+                    bx.tcx()
+                        .dcx()
+                        .span_err(span, "PolyASM compiler marker cannot return an unsized value");
+                    return false;
+                }
+            }
+        } else {
+            let place = self.codegen_place(bx, destination.as_ref());
+            operand.store_with_annotation(bx, place);
+        }
+        true
+    }
+
+    /// Materializes the exact schedule carried by `StaticCallable` and leaves
+    /// the compile-time binding marker itself unlowered.
+    fn codegen_polyasm_static_bind(
+        &mut self,
+        helper: &TerminatorCodegenHelper<'tcx>,
+        bx: &mut Bx,
+        func: &mir::Operand<'tcx>,
+        args: &[Spanned<mir::Operand<'tcx>>],
+        destination: mir::Place<'tcx>,
+        target: Option<mir::BasicBlock>,
+        source_info: mir::SourceInfo,
+        kind: &CallKind,
+        mergeable_succ: bool,
+    ) -> Option<MergingSucc> {
+        if !bx.tcx().sess.is_polyasm_target() {
+            return None;
+        }
+        let (def_id, generic_args) = func.const_fn_def()?;
+        if !bx.tcx().is_diagnostic_item(sym::polyasm_bind_static_clock, def_id) {
+            return None;
+        }
+        if *kind == CallKind::Tail {
+            return Some(self.codegen_polyasm_abort(
+                bx,
+                destination,
+                source_info.span,
+                "PolyASM static-clock binding cannot be used as an explicit tail call",
+            ));
+        }
+        let [argument] = args else {
+            return Some(self.codegen_polyasm_abort(
+                bx,
+                destination,
+                source_info.span,
+                "PolyASM static-clock binding marker has an invalid ABI",
+            ));
+        };
+        let generic_args = self.monomorphize(generic_args);
+        let callable_ty = generic_args.type_at(1);
+        let argument_ty = self.monomorphize(argument.node.ty(self.mir, bx.tcx()));
+        let closed = match *callable_ty.kind() {
+            ty::FnDef(..) => true,
+            ty::Closure(_, args) => args.as_closure().tupled_upvars_ty().is_unit(),
+            _ => false,
+        };
+        let Some(callable) = (argument_ty == callable_ty && closed)
+            .then(|| resolve_polyasm_callable(bx.tcx(), callable_ty, source_info.span))
+            .flatten()
+        else {
+            return Some(self.codegen_polyasm_abort(
+                bx,
+                destination,
+                source_info.span,
+                "PolyASM static-clock binding lost its closed callable identity",
+            ));
+        };
+        let requested_cycles = polyasm_u64_const(bx.tcx(), generic_args.const_at(2));
+        let architecture = generic_args.type_at(0);
+        let clock_hz = polyasm_static_clock_hz(bx.tcx(), architecture);
+        let (Some(requested_cycles), Some(clock_hz)) = (requested_cycles, clock_hz) else {
+            return Some(self.codegen_polyasm_abort(
+                bx,
+                destination,
+                source_info.span,
+                "PolyASM static-clock binding does not have a concrete registered schedule",
+            ));
+        };
+        if clock_hz == 0
+            || normalized_polyasm_static_schedule(bx.tcx(), callable, architecture)
+                != Some(requested_cycles)
+        {
+            return Some(self.codegen_polyasm_abort(
+                bx,
+                destination,
+                source_info.span,
+                "PolyASM static-clock binding does not match the normalized callable schedule",
+            ));
+        }
+
+        let destination_ty = self.monomorphized_place_ty(destination.as_ref());
+        let ty::Adt(destination_definition, destination_args) = *destination_ty.kind() else {
+            return Some(self.codegen_polyasm_abort(
+                bx,
+                destination,
+                source_info.span,
+                "PolyASM static-clock binding has an invalid destination representation",
+            ));
+        };
+        if !bx.tcx().is_diagnostic_item(sym::polyasm_static_callable, destination_definition.did())
+            || destination_args.len() != 3
+            || destination_args.type_at(0) != callable_ty
+            || destination_args.type_at(1) != architecture
+            || polyasm_u64_const(bx.tcx(), destination_args.const_at(2)) != Some(requested_cycles)
+        {
+            return Some(self.codegen_polyasm_abort(
+                bx,
+                destination,
+                source_info.span,
+                "PolyASM static-clock binding destination does not preserve its exact callable schedule",
+            ));
+        }
+        let destination_layout = self.cx.layout_of(destination_ty);
+        if !self.cx.layout_of(callable_ty).is_zst() || destination_layout.fields.count() != 3 {
+            return Some(self.codegen_polyasm_abort(
+                bx,
+                destination,
+                source_info.span,
+                "PolyASM static-clock binding cannot retain a runtime callable environment",
+            ));
+        }
+        let callable_layout = destination_layout.field(bx, 0);
+        let warrant_layout = destination_layout.field(bx, 1);
+        let architecture_layout = destination_layout.field(bx, 2);
+        if callable_layout.ty != callable_ty
+            || !callable_layout.is_zst()
+            || !architecture_layout.is_zst()
+            || warrant_layout.fields.count() != 2
+        {
+            return Some(self.codegen_polyasm_abort(
+                bx,
+                destination,
+                source_info.span,
+                "PolyASM static-clock binding has an incompatible witness layout",
+            ));
+        }
+        let property_layout = warrant_layout.field(bx, 0);
+        let schedule_layout = warrant_layout.field(bx, 1);
+        if !property_layout.is_zst() || schedule_layout.fields.count() != 2 {
+            return Some(self.codegen_polyasm_abort(
+                bx,
+                destination,
+                source_info.span,
+                "PolyASM static-clock binding has an incompatible warrant layout",
+            ));
+        }
+        let clock_layout = schedule_layout.field(bx, 0);
+        let cycles_layout = schedule_layout.field(bx, 1);
+        let clock_offset = destination_layout.fields.offset(1).bytes()
+            + warrant_layout.fields.offset(1).bytes()
+            + schedule_layout.fields.offset(0).bytes();
+        let cycles_offset = destination_layout.fields.offset(1).bytes()
+            + warrant_layout.fields.offset(1).bytes()
+            + schedule_layout.fields.offset(1).bytes();
+        let BackendRepr::ScalarPair { b_offset, .. } = destination_layout.backend_repr else {
+            return Some(self.codegen_polyasm_abort(
+                bx,
+                destination,
+                source_info.span,
+                "PolyASM static-clock binding has a non-scalar schedule representation",
+            ));
+        };
+        let b_offset = b_offset.bytes();
+        let cycles_first = (cycles_offset, clock_offset) == (0, b_offset);
+        let clock_first = (clock_offset, cycles_offset) == (0, b_offset);
+        if cycles_layout.ty != bx.tcx().types.u64
+            || clock_layout.size.bytes() != 8
+            || !matches!(clock_layout.backend_repr, BackendRepr::Scalar(_))
+            || (!cycles_first && !clock_first)
+        {
+            return Some(self.codegen_polyasm_abort(
+                bx,
+                destination,
+                source_info.span,
+                "PolyASM static-clock binding cannot materialize its exact schedule payload",
+            ));
+        }
+        let cycles = bx.const_u64(requested_cycles);
+        let clock_hz = bx.const_u64(clock_hz);
+        let (first, second) = if cycles_first { (cycles, clock_hz) } else { (clock_hz, cycles) };
+        let operand = OperandRef {
+            val: Pair(first, second),
+            layout: destination_layout,
+            move_annotation: None,
+        };
+        if !self.store_polyasm_marker_result(bx, destination, operand, source_info.span) {
+            bx.abort_immediate();
+            bx.unreachable();
+            return Some(MergingSucc::False);
+        }
+        Some(self.finish_polyasm_marker(helper, bx, target, mergeable_succ))
+    }
+
+    /// Erases compile-time markers after preserving the sole value-producing
+    /// statement marker as an identity operation.
+    fn codegen_polyasm_witness_marker(
+        &mut self,
+        helper: &TerminatorCodegenHelper<'tcx>,
+        bx: &mut Bx,
+        func: &mir::Operand<'tcx>,
+        args: &[Spanned<mir::Operand<'tcx>>],
+        destination: mir::Place<'tcx>,
+        target: Option<mir::BasicBlock>,
+        source_info: mir::SourceInfo,
+        kind: &CallKind,
+        mergeable_succ: bool,
+    ) -> Option<MergingSucc> {
+        if !bx.tcx().sess.is_polyasm_target() {
+            return None;
+        }
+        let (def_id, generic_args) = func.const_fn_def()?;
+        let callable_warrant = bx.tcx().is_diagnostic_item(sym::polyasm_require_always, def_id)
+            || bx.tcx().is_diagnostic_item(sym::polyasm_require_not_always, def_id);
+        // The marker expression yields its argument. Placement information
+        // travels separately on the invocation of that callable.
+        let statement_warrant = bx.tcx().is_diagnostic_item(sym::polyasm_require_statement, def_id)
+            || bx.tcx().is_diagnostic_item(sym::polyasm_offload, def_id)
+            || bx.tcx().is_diagnostic_item(sym::polyasm_request_offload, def_id);
+        let witness_wrapper = if callable_warrant || statement_warrant {
+            false
+        } else {
+            ty::Instance::try_resolve(
+                bx.tcx(),
+                ty::TypingEnv::fully_monomorphized(),
+                def_id,
+                self.monomorphize(generic_args),
+            )
+            .ok()
+            .flatten()
+            .is_some_and(|instance| bx.tcx().polyasm_witness_only_wrapper(instance))
+        };
+        if !callable_warrant && !statement_warrant && !witness_wrapper {
+            return None;
+        }
+        if *kind == CallKind::Tail {
+            return Some(self.codegen_polyasm_abort(
+                bx,
+                destination,
+                source_info.span,
+                "PolyASM compiler witness cannot be used as an explicit tail call",
+            ));
+        }
+
+        let operand = if statement_warrant {
+            let [argument] = args else {
+                return Some(self.codegen_polyasm_abort(
+                    bx,
+                    destination,
+                    source_info.span,
+                    "PolyASM statement warrant marker has an invalid ABI",
+                ));
+            };
+            self.codegen_operand(bx, &argument.node)
+        } else {
+            if callable_warrant && args.len() != 1 {
+                return Some(self.codegen_polyasm_abort(
+                    bx,
+                    destination,
+                    source_info.span,
+                    "PolyASM callable warrant marker has an invalid ABI",
+                ));
+            }
+            let layout = self.cx.layout_of(self.monomorphized_place_ty(destination.as_ref()));
+            if !layout.is_zst() {
+                return Some(self.codegen_polyasm_abort(
+                    bx,
+                    destination,
+                    source_info.span,
+                    "PolyASM witness-only marker unexpectedly returns a runtime value",
+                ));
+            }
+            OperandRef::zero_sized(layout)
+        };
+        if !self.store_polyasm_marker_result(bx, destination, operand, source_info.span) {
+            bx.abort_immediate();
+            bx.unreachable();
+            return Some(MergingSucc::False);
+        }
+        Some(self.finish_polyasm_marker(helper, bx, target, mergeable_succ))
+    }
+
+    /// Replaces a PolyASM static-clock selection marker with the one direct
+    /// call proved by normalized MIR. The LLVM backend reaches calls through
+    /// this shared SSA path, so making the choice here keeps declined bodies
+    /// out of its IR just as the Cranelift backend does before scalar lowering.
+    fn codegen_polyasm_static_invoke(
+        &mut self,
+        helper: &TerminatorCodegenHelper<'tcx>,
+        bx: &mut Bx,
+        func: &mir::Operand<'tcx>,
+        args: &[Spanned<mir::Operand<'tcx>>],
+        destination: mir::Place<'tcx>,
+        target: Option<mir::BasicBlock>,
+        unwind: mir::UnwindAction,
+        source_info: mir::SourceInfo,
+        kind: &CallKind,
+        mergeable_succ: bool,
+    ) -> Option<MergingSucc> {
+        if !bx.tcx().sess.is_polyasm_target() {
+            return None;
+        }
+        let (def_id, generic_args) = func.const_fn_def()?;
+        let exact = bx.tcx().is_diagnostic_item(sym::polyasm_invoke_static_faster_exact, def_id);
+        let on = bx.tcx().is_diagnostic_item(sym::polyasm_invoke_static_faster_on, def_id);
+        if !exact && !on && !bx.tcx().is_diagnostic_item(sym::polyasm_invoke_static_faster, def_id)
+        {
+            return None;
+        }
+        if *kind == CallKind::Tail {
+            return Some(self.codegen_polyasm_abort(
+                bx,
+                destination,
+                source_info.span,
+                "PolyASM static selection cannot be used as an explicit tail call",
+            ));
+        }
+        let [lhs, rhs] = args else {
+            return Some(self.codegen_polyasm_abort(
+                bx,
+                destination,
+                source_info.span,
+                "PolyASM static selection marker has an invalid ABI",
+            ));
+        };
+        let generic_args = self.monomorphize(generic_args);
+        if exact || on {
+            let lhs_ty = self.monomorphize(lhs.node.ty(self.mir, bx.tcx()));
+            let rhs_ty = self.monomorphize(rhs.node.ty(self.mir, bx.tcx()));
+            if lhs_ty != generic_args.type_at(0) || rhs_ty != generic_args.type_at(1) {
+                return Some(self.codegen_polyasm_abort(
+                    bx,
+                    destination,
+                    source_info.span,
+                    "PolyASM exact static selection operands changed callable identity",
+                ));
+            }
+        }
+        let selection = if on {
+            match polyasm_static_callable_selection_on(bx.tcx(), generic_args, source_info.span) {
+                Ok(selection) => selection,
+                Err(error) => {
+                    return Some(self.codegen_polyasm_abort(
+                        bx,
+                        destination,
+                        error.span(),
+                        error.message().to_owned(),
+                    ));
+                }
+            }
+        } else {
+            let Some(selection) =
+                polyasm_static_callable_selection(bx.tcx(), generic_args, source_info.span)
+            else {
+                return Some(self.codegen_polyasm_abort(
+                    bx,
+                    destination,
+                    source_info.span,
+                    "PolyASM static selection requires two closed compiler-checked schedules",
+                ));
+            };
+            selection
+        };
+        let selected = selection.selected();
+        let selected_ty = selection.selected_ty();
+        let selected_layout = self.cx.layout_of(selected_ty);
+        if !selected_layout.is_zst() {
+            return Some(self.codegen_polyasm_abort(
+                bx,
+                destination,
+                source_info.span,
+                "PolyASM static selection cannot bind a runtime callable environment",
+            ));
+        }
+
+        let fn_abi = bx.fn_abi_of_instance(selected, ty::List::empty());
+        let mut llargs = Vec::with_capacity(fn_abi.args.len());
+        let (return_dest, return_slot) = self.make_return_dest(bx, destination, &fn_abi.ret);
+        let call_destination = target.map(|target| (return_dest, target));
+        let mut lifetime_ends_after_call = Vec::new();
+
+        let mut handled_arguments = 0_usize;
+        if bx.tcx().def_kind(selected.def_id()) == DefKind::Closure {
+            let Some(environment) = fn_abi.args.first() else {
+                return Some(self.codegen_polyasm_abort(
+                    bx,
+                    destination,
+                    source_info.span,
+                    "PolyASM selected closure has no environment ABI",
+                ));
+            };
+            let (operand, by_move) = if environment.layout.ty == selected_ty {
+                (OperandRef::zero_sized(selected_layout), true)
+            } else if let ty::Ref(_, pointee, _) = *environment.layout.ty.kind()
+                && pointee == selected_ty
+            {
+                let address = bx.const_usize(selected_layout.align.abi.bytes());
+                let pointer_ty = bx.type_ptr();
+                let pointer = bx.inttoptr(address, pointer_ty);
+                (
+                    OperandRef {
+                        val: Immediate(pointer),
+                        layout: environment.layout,
+                        move_annotation: None,
+                    },
+                    false,
+                )
+            } else {
+                return Some(self.codegen_polyasm_abort(
+                    bx,
+                    destination,
+                    source_info.span,
+                    "PolyASM selected closure has an unsupported environment ABI",
+                ));
+            };
+            self.codegen_argument(
+                bx,
+                fn_abi.conv,
+                operand,
+                by_move,
+                &mut llargs,
+                environment,
+                &mut lifetime_ends_after_call,
+            );
+            handled_arguments += 1;
+        }
+        if selected.def.requires_caller_location(bx.tcx()) {
+            let location = self.get_caller_location(bx, source_info);
+            let argument = fn_abi.args.last().unwrap();
+            self.codegen_argument(
+                bx,
+                fn_abi.conv,
+                location,
+                false,
+                &mut llargs,
+                argument,
+                &mut lifetime_ends_after_call,
+            );
+            handled_arguments += 1;
+        }
+        if handled_arguments != fn_abi.args.len() {
+            return Some(self.codegen_polyasm_abort(
+                bx,
+                destination,
+                source_info.span,
+                "PolyASM selected callable has an unexpected compiler ABI",
+            ));
+        }
+        let fn_ptr = bx.get_fn_addr(selected, bx.sess().pointer_authentication_functions());
+        bx.preserve_polyasm_callable(fn_ptr);
+        self.set_debug_loc(bx, source_info);
+        Some(helper.do_call(
+            self,
+            bx,
+            fn_abi,
+            fn_ptr,
+            return_slot,
+            &llargs,
+            call_destination,
+            unwind,
+            &lifetime_ends_after_call,
+            Some(selected),
+            CallKind::Normal,
+            mergeable_succ,
+        ))
+    }
+
     fn codegen_call_terminator(
         &mut self,
         helper: TerminatorCodegenHelper<'tcx>,
@@ -971,6 +1638,47 @@ impl<'a, 'tcx, Bx: BuilderMethods<'a, 'tcx>> FunctionCx<'a, 'tcx, Bx> {
         mergeable_succ: bool,
     ) -> MergingSucc {
         let source_info = mir::SourceInfo { span: fn_span, ..terminator.source_info };
+
+        if let Some(result) = self.codegen_polyasm_static_bind(
+            &helper,
+            bx,
+            func,
+            args,
+            destination,
+            target,
+            source_info,
+            &kind,
+            mergeable_succ,
+        ) {
+            return result;
+        }
+        if let Some(result) = self.codegen_polyasm_static_invoke(
+            &helper,
+            bx,
+            func,
+            args,
+            destination,
+            target,
+            unwind,
+            source_info,
+            &kind,
+            mergeable_succ,
+        ) {
+            return result;
+        }
+        if let Some(result) = self.codegen_polyasm_witness_marker(
+            &helper,
+            bx,
+            func,
+            args,
+            destination,
+            target,
+            source_info,
+            &kind,
+            mergeable_succ,
+        ) {
+            return result;
+        }
 
         // Create the callee. This is a fn ptr or zero-sized and hence a kind of scalar.
         let callee = self.codegen_operand(bx, func);

@@ -29,8 +29,24 @@ use crate::core::config::flags::Subcommand;
 use crate::core::config::{CompressDebuginfo, TargetSelection};
 use crate::core::session::{CLang, Session};
 use crate::utils::exec::{BootstrapCommand, command};
+
+const POLYASM_C_PROBE_TARGET: &str = "wasm32-unknown-unknown";
+
+/// The tuple cc-rs is asked about in place of a PolyASM tuple.
+///
+/// All three PolyASM tuples share one stand-in. The probe exists only to reach
+/// a C compiler, and every PolyASM tuple leaves the native C ABI out, so the
+/// stand-in's pointer width stays apart from all of them and one stand-in serves all
+/// widths.
+fn c_probe_target(target: TargetSelection) -> TargetSelection {
+    if target.is_polyasm() { TargetSelection::from_user(POLYASM_C_PROBE_TARGET) } else { target }
+}
+
 /// Creates and configures a new [`cc::Build`] instance for the given target.
 fn new_cc_build(sess: &Session, target: TargetSelection) -> cc::Build {
+    // This mapping stays internal to bootstrap's compiler probe. rustc/Cargo
+    // target identity and the user-facing ABI stay as they are.
+    let c_target = c_probe_target(target);
     let mut cfg = cc::Build::new();
     cfg.cargo_metadata(false)
         .opt_level(2)
@@ -38,7 +54,7 @@ fn new_cc_build(sess: &Session, target: TargetSelection) -> cc::Build {
         .debug(false)
         // We have to configure out_dir, otherwise flag_if_supported will not work
         .out_dir(sess.tempdir().join("cc-rs-out-dir"))
-        .target(&target.triple)
+        .target(&c_target.triple)
         .host(&sess.host_target.triple);
 
     match sess.config.compress_debuginfo(target) {

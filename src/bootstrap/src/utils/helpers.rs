@@ -546,25 +546,8 @@ pub fn check_cfg_arg(name: &str, values: Option<&[&str]>) -> String {
 /// on each one of them correctly.
 #[track_caller]
 pub fn git(source_dir: Option<&Path>) -> BootstrapCommand {
-    let mut git = command("git");
-    // git commands are almost always read-only, so cache them by default
-    git.cached();
-
-    if let Some(source_dir) = source_dir {
-        git.current_dir(source_dir);
-        // If we are running inside git (e.g. via a hook), `GIT_DIR` is set and takes precedence
-        // over the current dir. Un-set it to make the current dir matter.
-        git.env_remove("GIT_DIR");
-        // Also un-set some other variables, to be on the safe side (based on cargo's
-        // `fetch_with_cli`). In particular un-setting `GIT_INDEX_FILE` is required to fix some odd
-        // misbehavior.
-        git.env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_OBJECT_DIRECTORY")
-            .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES");
-    }
-
-    git
+    let _ = source_dir;
+    panic!("Git execution is disabled by the PolyASM source policy")
 }
 
 /// Sets the file times for a given file at `path`.

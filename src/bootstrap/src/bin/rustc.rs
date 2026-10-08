@@ -105,6 +105,19 @@ fn main() {
         }
     }
 
+    // A path dependency from outside the source tree is a crate of the
+    // workspace vendoring this compiler, linked into a codegen backend: that
+    // workspace lints it, and here it builds as a dependency, with its lints
+    // capped. It keeps the stability its own workspace builds it with, so the
+    // `-Zforce-unstable-if-unmarked` that `x.py clippy` hands every crate
+    // through its rustflags leaves its arguments here.
+    let vendoring = env::var_os("RUSTC_FORCE_UNSTABLE").is_some_and(|root| {
+        env::var_os("CARGO_MANIFEST_DIR").is_some_and(|dir| !Path::new(&dir).starts_with(&root))
+    });
+    if vendoring {
+        args.retain(|arg| arg.to_str() != Some("-Zforce-unstable-if-unmarked"));
+    }
+
     let mut cmd = match env::var_os("RUSTC_WRAPPER_REAL") {
         Some(wrapper) if !wrapper.is_empty() => {
             let mut cmd = ArgFileCommand::new(wrapper);
@@ -128,7 +141,9 @@ fn main() {
         cmd.env("RUST_BACKTRACE", "1");
     }
 
-    if let Ok(lint_flags) = env::var("RUSTC_LINT_FLAGS") {
+    if vendoring {
+        cmd.arg("--cap-lints=allow");
+    } else if let Ok(lint_flags) = env::var("RUSTC_LINT_FLAGS") {
         cmd.args(lint_flags.split_whitespace());
     }
 
@@ -175,9 +190,14 @@ fn main() {
 
     // Force all crates compiled by this compiler to (a) be unstable and (b)
     // allow the `rustc_private` feature to link to other unstable crates
-    // also in the sysroot. We also do this for host crates, since those
-    // may be proc macros, in which case we might ship them.
-    if env::var_os("RUSTC_FORCE_UNSTABLE").is_some() {
+    // also in the sysroot. Host crates take the same flags, because host
+    // crates include proc macros and the sysroot ships them. A crate of the
+    // vendoring workspace ships inside the backend that links it: it keeps the
+    // stability its own workspace builds it with and links its sysroot
+    // neighbours through `rustc_private`.
+    if vendoring {
+        cmd.arg("-Zcrate-attr=feature(rustc_private)");
+    } else if env::var_os("RUSTC_FORCE_UNSTABLE").is_some() {
         cmd.arg("-Z").arg("force-unstable-if-unmarked");
     }
 

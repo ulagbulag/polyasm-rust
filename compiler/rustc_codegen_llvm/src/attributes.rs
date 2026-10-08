@@ -38,6 +38,24 @@ pub(crate) fn apply_to_callsite(callsite: &Value, idx: AttributePlace, attrs: &[
     }
 }
 
+/// Keeps a PolyASM graph node visible across LLVM's interprocedural passes.
+pub(crate) fn preserve_polyasm_callable<'ll>(cx: &SimpleCx<'ll>, llfn: &'ll Value) {
+    let place = AttributePlace::Function;
+    for kind in [
+        AttributeKind::AlwaysInline,
+        AttributeKind::InlineHint,
+        AttributeKind::MinSize,
+        AttributeKind::OptimizeForSize,
+    ] {
+        unsafe {
+            llvm::LLVMRustRemoveEnumAttributeAtIndex(llfn, place.as_uint(), kind);
+        }
+    }
+    let no_inline = AttributeKind::NoInline.create_attr(cx.llcx);
+    let optimize_none = AttributeKind::OptimizeNone.create_attr(cx.llcx);
+    apply_to_llfn(llfn, place, &[no_inline, optimize_none]);
+}
+
 pub(crate) fn has_string_attr(llfn: &Value, name: &str) -> bool {
     llvm::HasStringAttribute(llfn, name)
 }
@@ -64,6 +82,21 @@ pub(crate) fn inline_attr<'tcx, 'll>(
         (_, OptimizeAttr::DoNotOptimize) => InlineAttr::Never,
         (InlineAttr::None, _) if instance.def.requires_inline(tcx) => InlineAttr::Hint,
         (inline, _) => inline,
+    };
+    // A PolyASM image keeps each global allocator entry a call of its own
+    // record, in the crate that defines the allocator as in every crate that
+    // calls it: the lift reads an allocation as a fresh buffer of its call,
+    // which an inlined allocator body hides behind the allocator's state.
+    let inline = if tcx.sess.is_polyasm_target()
+        && codegen_fn_attrs.flags.intersects(
+            CodegenFnAttrFlags::ALLOCATOR
+                | CodegenFnAttrFlags::ALLOCATOR_ZEROED
+                | CodegenFnAttrFlags::REALLOCATOR
+                | CodegenFnAttrFlags::DEALLOCATOR,
+        ) {
+        InlineAttr::Never
+    } else {
+        inline
     };
 
     match inline {

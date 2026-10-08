@@ -239,11 +239,21 @@ pub struct Box<
 >(Unique<T>, A);
 
 /// Monomorphic function for allocating an uninit `Box`.
+///
+/// Leaving the choice to the backend is a choice only where the backend has an
+/// interprocedural inliner to make it with. The PolyASM backend leaves inlining to MIR, so on
+/// that target the attribute below keeps the call: it is the first check
+/// `is_inline_valid_on_fn` applies, ahead of cost and threshold, so every
+/// `-Zmir-opt-level` stops at it and the call survives to the machine. The
+/// constant `Layout` a `Box::<[u8; N]>::new_uninit()` call site hands in then
+/// stays clear of the `size == 0` arm that would fold it, and a loop of
+/// zero-size allocations that folds to a dangling constant elsewhere stays a
+/// loop of calls here. The attribute therefore leaves out the PolyASM target.
 #[inline]
 // The is a separate function to avoid doing it in every generic version, but it
 // looks small to the mir inliner (particularly in panic=abort) so leave it to
 // the backend to decide whether pulling it in everywhere is worth doing.
-#[rustc_no_mir_inline]
+#[cfg_attr(not(target_arch = "polyasm"), rustc_no_mir_inline)]
 #[cfg_attr(miri, track_caller)] // even without panics, this helps for Miri backtraces
 #[cfg(not(no_global_oom_handling))]
 #[rustc_const_unstable(feature = "const_heap", issue = "79597")]

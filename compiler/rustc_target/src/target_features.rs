@@ -1199,6 +1199,10 @@ impl Target {
             Arch::M68k => M68K_FEATURES,
             Arch::Avr => AVR_FEATURES,
             Arch::Xtensa => XTENSA_FEATURES,
+            // PolyASM carries WebAssembly's family, so the bodies that family
+            // selects name WebAssembly's features, and answering with that list
+            // admits the attribute on every one of them.
+            Arch::Polyasm => WASM_FEATURES,
             Arch::AmdGpu | Arch::Msp430 | Arch::SpirV | Arch::Other(_) => &[],
         }
     }
@@ -1231,7 +1235,7 @@ impl Target {
                 MIPS_FEATURES_FOR_CORRECT_FIXED_LENGTH_VECTOR_ABI
             }
             Arch::AmdGpu => AMDGPU_FEATURES_FOR_CORRECT_FIXED_LENGTH_VECTOR_ABI,
-            Arch::Nvptx64 | Arch::Bpf | Arch::M68k | Arch::Avr => &[], // no vector ABI
+            Arch::Nvptx64 | Arch::Bpf | Arch::M68k | Arch::Avr | Arch::Polyasm => &[], // no vector ABI
             Arch::CSky => CSKY_FEATURES_FOR_CORRECT_FIXED_LENGTH_VECTOR_ABI,
             // FIXME: for some tier3 targets, we are overly cautious and always give warnings
             // when passing args in vector registers.

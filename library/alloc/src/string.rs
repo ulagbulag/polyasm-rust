@@ -803,7 +803,9 @@ impl String {
             return Err(FromUtf16Error { kind: FromUtf16ErrorKind::OddBytes });
         };
         // SAFETY: The aligned part of `v` can be transmuted into a valid u16 slice.
-        match (cfg!(target_endian = "little"), unsafe { v.align_to::<u16>() }) {
+        match (cfg!(any(target_endian = "little", target_abi = "polyasm")), unsafe {
+            v.align_to::<u16>()
+        }) {
             (true, ([], v, [])) => Self::from_utf16(v),
             _ => {
                 Self::from_utf16_units(chunks.iter().copied().map(u16::from_le_bytes), chunks.len())
@@ -839,7 +841,9 @@ impl String {
     #[stable(feature = "str_from_utf16_endian", since = "1.98.0")]
     pub fn from_utf16le_lossy(v: &[u8]) -> String {
         // SAFETY: The aligned part of `v` can be transmuted into a valid u16 slice.
-        match (cfg!(target_endian = "little"), unsafe { v.align_to::<u16>() }) {
+        match (cfg!(any(target_endian = "little", target_abi = "polyasm")), unsafe {
+            v.align_to::<u16>()
+        }) {
             (true, ([], v, [])) => Self::from_utf16_lossy(v),
             (true, ([], v, [_remainder])) => Self::from_utf16_lossy(v) + "\u{FFFD}",
             _ => {

@@ -23,6 +23,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_session::Session;
 use rustc_session::config::{self, Lto, OutputType, Passes, SplitDwarfKind, SwitchWithOptPath};
 use rustc_span::{BytePos, DUMMY_SP, InnerSpan, Pos, RemapPathScopeComponents};
+use rustc_structures::CrateType;
 use rustc_target::spec::{CodeModel, FloatAbi, RelocModel, SanitizerSet, SplitDebuginfo, TlsModel};
 use tracing::{debug, trace};
 
@@ -872,6 +873,21 @@ pub(crate) fn optimize(
 
     if module.kind == ModuleKind::Regular {
         save_temp_bitcode(cgcx, module, "no-opt");
+    }
+
+    // The external PolyASM frontend owns a final image's LLVM pipeline after
+    // it has linked the complete crate graph. Running rustc's per-CGU pipeline
+    // over that root first erases callable graph edges before the boundary
+    // observes them at times, even when the entry itself is `optnone`.
+    // Dependency archives remain optimized independently and avoid carrying
+    // raw sysroot modules into every final link.
+    if cgcx.target_arch == "polyasm"
+        && cgcx
+            .crate_types
+            .iter()
+            .any(|kind| matches!(kind, CrateType::Cdylib | CrateType::Executable))
+    {
+        return;
     }
 
     // FIXME(ZuseZ4): support SanitizeHWAddress and prevent illegal/unsupported opts

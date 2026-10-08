@@ -1,9 +1,10 @@
 use std::env;
 use std::path::PathBuf;
 
+use cg_clif_build_system::{rustflags_from_env, rustflags_to_cmd_env};
+
 use crate::path::{Dirs, RelPath};
 use crate::rustc_info::get_file_name;
-use crate::shared_utils::{rustflags_from_env, rustflags_to_cmd_env};
 use crate::utils::{CargoProject, Compiler, LogGroup};
 
 static CG_CLIF: CargoProject = CargoProject::new(RelPath::source("."), "cg_clif");

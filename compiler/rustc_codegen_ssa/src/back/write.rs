@@ -136,6 +136,12 @@ impl ModuleConfig {
 
         let emit_obj = if !should_emit_obj {
             EmitObj::None
+        } else if sess.is_polyasm_target() {
+            // A PolyASM object *is* bitcode. The lowering to PolyASM machine
+            // code lives outside the compiler, so the module is carried as
+            // bitcode into the rlib, fat LTO merges it back out, and the
+            // emitter turns the merged module into the image.
+            EmitObj::Bitcode
         } else if sess.target.obj_is_bitcode
             || (sess.opts.cg.linker_plugin_lto.enabled()
                 && (!no_builtins || tcx.sess.is_sanitizer_cfi_enabled()))
@@ -228,11 +234,16 @@ impl ModuleConfig {
             no_builtins: no_builtins || sess.target.no_builtins,
 
             // Copy what clang does by turning on loop vectorization at O2 and
-            // slp vectorization at O3.
+            // slp vectorization at O3. A PolyASM target keeps both off: its
+            // lowering selects scalar steps and the byte-laned registers the
+            // guest names itself, and its own link-time pipeline runs with
+            // both vectorizers off for the same reason.
             vectorize_loop: !sess.opts.cg.no_vectorize_loops
+                && !sess.is_polyasm_target()
                 && (sess.opts.optimize == config::OptLevel::More
                     || sess.opts.optimize == config::OptLevel::Aggressive),
             vectorize_slp: !sess.opts.cg.no_vectorize_slp
+                && !sess.is_polyasm_target()
                 && sess.opts.optimize == config::OptLevel::Aggressive,
 
             // Some targets (namely, NVPTX) interact badly with the
@@ -1213,10 +1224,20 @@ fn start_executing_work<B: WriteBackendMethods>(
 ) -> thread::JoinHandle<Result<MaybeLtoModules<B>, ()>> {
     let sess = tcx.sess;
     let prof = sess.prof.clone();
+    let publishes_polyasm = sess.is_polyasm_target()
+        && tcx
+            .crate_types()
+            .iter()
+            .any(|kind| matches!(kind, CrateType::Cdylib | CrateType::Executable));
+    // A PolyASM publisher links the complete bitcode graph itself and hands it
+    // to the selected frontend. Local LTO would consume that graph ahead of the
+    // publisher, so dependencies retain their normal policy while the final
+    // root goes directly to its frontend-owned pipeline.
+    let lto = if publishes_polyasm { Lto::No } else { sess.lto() };
 
     // Compute the set of symbols we need to retain when doing thin local LTO (if we need to)
     let exported_symbols_for_lto =
-        if sess.lto() == Lto::ThinLocal { lto::exported_symbols_for_lto(tcx, &[]) } else { vec![] };
+        if lto == Lto::ThinLocal { lto::exported_symbols_for_lto(tcx, &[]) } else { vec![] };
 
     // First up, convert our jobserver into a helper thread so we can use normal
     // mpsc channels to manage our messages and such.
@@ -1256,7 +1277,7 @@ fn start_executing_work<B: WriteBackendMethods>(
 
     let cgcx = CodegenContext {
         crate_types: tcx.crate_types().to_vec(),
-        lto: sess.lto(),
+        lto,
         use_linker_plugin_lto: sess.opts.cg.linker_plugin_lto.enabled(),
         dylib_lto: sess.opts.unstable_opts.dylib_lto,
         prefer_dynamic: sess.opts.cg.prefer_dynamic,

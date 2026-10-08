@@ -12,10 +12,11 @@ use rustc_data_structures::stable_hash::{
 use rustc_data_structures::unord::UnordMap;
 use rustc_hashes::Hash128;
 use rustc_hir::ItemId;
-use rustc_hir::def_id::{CrateNum, DefId, DefIdSet, LOCAL_CRATE};
+use rustc_hir::def::DefKind;
+use rustc_hir::def_id::{CRATE_DEF_ID, CrateNum, DefId, DefIdSet, LOCAL_CRATE};
 use rustc_macros::{StableHash, TyDecodable, TyEncodable};
 use rustc_session::config::OptLevel;
-use rustc_span::{OrdSpan, Span, Symbol};
+use rustc_span::{OrdSpan, Span, Symbol, sym};
 use rustc_target::spec::SymbolVisibility;
 use tracing::debug;
 
@@ -57,6 +58,91 @@ pub enum MonoItem<'tcx> {
     Fn(Instance<'tcx>),
     Static(DefId),
     GlobalAsm(ItemId),
+}
+
+/// Returns whether `def_id` is the compiler-selected crate-root entry for a
+/// PolyASM final image.  The source item is intentionally a normal Rust
+/// function, and the function itself is the whole requirement.
+pub fn is_polyasm_entry(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+    tcx.sess.is_polyasm_target()
+        && def_id.is_local()
+        && tcx.def_kind(def_id) == DefKind::Fn
+        && tcx.parent(def_id) == CRATE_DEF_ID.to_def_id()
+        && tcx.opt_item_name(def_id).is_some_and(|item| item.as_str() == "polyasm_entry")
+}
+
+/// Restricts entry authority to the source item. Compiler-generated shims share
+/// its `DefId` at times, while the source item alone is a selectable entry.
+pub fn is_polyasm_entry_instance(tcx: TyCtxt<'_>, instance: Instance<'_>) -> bool {
+    matches!(instance.def, InstanceKind::Item(def_id) if is_polyasm_entry(tcx, def_id))
+}
+
+/// Returns whether `def_id` is a PolyASM compiler marker.
+///
+/// A marker carries a compile-time property alone. Code generation replaces its
+/// call with the compiler's own decision and leaves its body unlowered, so
+/// everything that body names stays unreachable from the artifact.
+pub fn is_polyasm_witness_marker(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+    [
+        sym::polyasm_bind_static_clock,
+        sym::polyasm_invoke_static_faster,
+        sym::polyasm_invoke_static_faster_exact,
+        sym::polyasm_invoke_static_faster_on,
+        sym::polyasm_offload,
+        sym::polyasm_request_offload,
+        sym::polyasm_require_always,
+        sym::polyasm_require_not_always,
+        sym::polyasm_require_statement,
+    ]
+    .into_iter()
+    .any(|marker| tcx.is_diagnostic_item(marker, def_id))
+}
+
+/// Returns every concrete callable named by a PolyASM compiler marker. These
+/// are the subjects of the marker: their normalized MIR is what the analyzer
+/// reads. Being a subject and running are separate, so `polyasm_offload_roots`
+/// chooses the roots handed to code generation.
+pub fn polyasm_witness_callables<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+    args: ty::GenericArgsRef<'tcx>,
+) -> [Option<Ty<'tcx>>; 2] {
+    let type_at = |index: usize| args.get(index).and_then(|arg| arg.as_type());
+    if tcx.is_diagnostic_item(sym::polyasm_offload, def_id)
+        || tcx.is_diagnostic_item(sym::polyasm_request_offload, def_id)
+        || tcx.is_diagnostic_item(sym::polyasm_require_always, def_id)
+        || tcx.is_diagnostic_item(sym::polyasm_require_not_always, def_id)
+    {
+        [type_at(2), None]
+    } else if tcx.is_diagnostic_item(sym::polyasm_bind_static_clock, def_id) {
+        [type_at(1), None]
+    } else if tcx.is_diagnostic_item(sym::polyasm_invoke_static_faster, def_id)
+        || tcx.is_diagnostic_item(sym::polyasm_invoke_static_faster_exact, def_id)
+        || tcx.is_diagnostic_item(sym::polyasm_invoke_static_faster_on, def_id)
+    {
+        [type_at(0), type_at(1)]
+    } else {
+        [None, None]
+    }
+}
+
+/// Resolves a callable exactly as a direct use in monomorphized MIR. Collection
+/// and code generation share this so associated function resolution and the
+/// closure's actual call kind stay identical between analysis and use.
+pub fn resolve_polyasm_callable<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    callable: Ty<'tcx>,
+    span: Span,
+) -> Option<Instance<'tcx>> {
+    match *callable.kind() {
+        ty::FnDef(def_id, args) => args.no_bound_vars().map(|args| {
+            Instance::expect_resolve(tcx, ty::TypingEnv::fully_monomorphized(), def_id, args, span)
+        }),
+        ty::Closure(def_id, args) => {
+            Some(Instance::resolve_closure(tcx, def_id, args, args.as_closure().kind()))
+        }
+        _ => None,
+    }
 }
 
 fn opt_incr_drop_glue_mode<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> InstantiationMode {
@@ -146,7 +232,7 @@ impl<'tcx> MonoItem<'tcx> {
         };
 
         // Similarly, the executable entrypoint must be instantiated exactly once.
-        if tcx.is_entrypoint(instance.def_id()) {
+        if tcx.is_entrypoint(instance.def_id()) || is_polyasm_entry_instance(tcx, instance) {
             return InstantiationMode::GloballyShared { may_conflict: false };
         }
 

@@ -263,6 +263,10 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
                 | LangItem::Field
                 | LangItem::FnPtrTrait
                 | LangItem::PointeeTrait
+                | LangItem::PolyasmAlways
+                | LangItem::PolyasmCompilerCertificate
+                | LangItem::PolyasmCompilerCounterexample
+                | LangItem::PolyasmCompilerStaticClockCertificate
                 | LangItem::Tuple
                 | LangItem::Unpin,
             ) => ty::Binder::dummy(vec![]),

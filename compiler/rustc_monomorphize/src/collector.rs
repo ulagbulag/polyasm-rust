@@ -220,7 +220,10 @@ use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::interpret::{AllocId, ErrorHandled, GlobalAlloc, Scalar};
 use rustc_middle::mir::visit::Visitor as MirVisitor;
 use rustc_middle::mir::{self, Body, Location, MentionedItem, traversal};
-use rustc_middle::mono::{CollectionMode, InstantiationMode, MonoItem, NormalizationErrorInMono};
+use rustc_middle::mono::{
+    CollectionMode, InstantiationMode, MonoItem, NormalizationErrorInMono, is_polyasm_entry,
+    is_polyasm_witness_marker, resolve_polyasm_callable,
+};
 use rustc_middle::query::TyCtxtAt;
 use rustc_middle::ty::adjustment::{CustomCoerceUnsized, PointerCoercion};
 use rustc_middle::ty::layout::ValidityRequirement;
@@ -232,6 +235,7 @@ use rustc_middle::util::Providers;
 use rustc_session::config::{DebugInfo, EntryFnType, Offload};
 use rustc_span::{DUMMY_SP, Span, Spanned, Symbol, bug, dummy_spanned, respan, span_bug};
 use rustc_structures::Limit;
+use rustc_trait_selection::traits::polyasm_offload_roots;
 use tracing::{debug, instrument, trace};
 
 use crate::diagnostics::{
@@ -440,7 +444,7 @@ fn collect_items_rec<'tcx>(
 
                 if let Ok(alloc) = tcx.eval_static_initializer(def_id) {
                     for &prov in alloc.inner().provenance().ptrs().values() {
-                        collect_alloc(tcx, prov.alloc_id(), &mut used_items);
+                        collect_alloc(tcx, prov.alloc_id(), starting_item.span, &mut used_items);
                     }
                 }
 
@@ -505,7 +509,7 @@ fn collect_items_rec<'tcx>(
                         hir::InlineAsmOperand::Const { anon_const } => {
                             match tcx.const_eval_poly(anon_const.def_id.to_def_id()) {
                                 Ok(val) => {
-                                    collect_const_value(tcx, val, &mut used_items);
+                                    collect_const_value(tcx, val, *op_sp, &mut used_items);
                                 }
                                 Err(ErrorHandled::TooGeneric(..)) => {
                                     span_bug!(*op_sp, "asm const cannot be resolved; too generic")
@@ -816,7 +820,7 @@ impl<'a, 'tcx> MirVisitor<'tcx> for MirUsedCollector<'a, 'tcx> {
     fn visit_const_operand(&mut self, constant: &mir::ConstOperand<'tcx>, _location: Location) {
         // No `super_constant` as we don't care about `visit_ty`/`visit_ty_const`.
         let Some(val) = self.eval_constant(constant) else { return };
-        collect_const_value(self.tcx, val, self.used_items);
+        collect_const_value(self.tcx, val, constant.span, self.used_items);
     }
 
     fn visit_terminator(&mut self, terminator: &mir::Terminator<'tcx>, location: Location) {
@@ -1000,6 +1004,16 @@ fn visit_instance_use<'tcx>(
     output: &mut MonoItems<'tcx>,
 ) {
     debug!("visit_item_use({:?}, is_direct_call={:?})", instance, is_direct_call);
+    if !is_direct_call && reject_polyasm_witness_marker_reification(tcx, instance, source) {
+        return;
+    }
+    for callable in
+        polyasm_offload_roots(tcx, instance.def_id(), instance.args, source).into_iter().flatten()
+    {
+        if let Some(callable) = resolve_polyasm_callable(tcx, callable, source) {
+            visit_instance_use(tcx, callable, true, source, output);
+        }
+    }
     if !tcx.should_codegen_locally(instance) {
         return;
     }
@@ -1070,6 +1084,33 @@ fn visit_instance_use<'tcx>(
             output.push(create_fn_mono_item(tcx, instance, source));
         }
     }
+}
+
+/// Stops every attempt to materialize an address for a compile-time PolyASM
+/// marker. Direct calls remain mono items so their property is rechecked and
+/// any resulting diagnostic retains the caller's instantiation note.
+fn reject_polyasm_witness_marker_reification(
+    tcx: TyCtxt<'_>,
+    instance: Instance<'_>,
+    source: Span,
+) -> bool {
+    if !tcx.sess.is_polyasm_target() || !is_polyasm_witness_marker(tcx, instance.def_id()) {
+        return false;
+    }
+
+    let marker = tcx.def_path_str(instance.def_id());
+    let mut diagnostic = tcx.dcx().struct_span_err(
+        source,
+        format!(
+            "PolyASM compiler-witness marker `{marker}` names a warrant and owns no runtime operation, so it has no address and cannot be used as a value"
+        ),
+    );
+    diagnostic.span_label(source, "this use reifies the marker as a function pointer");
+    diagnostic.note(
+        "call the marker directly so PolyASM checks and erases the warrant operation during monomorphization",
+    );
+    diagnostic.emit();
+    true
 }
 
 /// Returns `true` if we should codegen an instance in the local crate, or returns `false` if we
@@ -1284,7 +1325,12 @@ fn create_mono_items_for_vtable_methods<'tcx>(
 }
 
 /// Scans the CTFE alloc in order to find function pointers and statics that must be monomorphized.
-fn collect_alloc<'tcx>(tcx: TyCtxt<'tcx>, alloc_id: AllocId, output: &mut MonoItems<'tcx>) {
+fn collect_alloc<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    alloc_id: AllocId,
+    source: Span,
+    output: &mut MonoItems<'tcx>,
+) {
     match tcx.global_alloc(alloc_id) {
         GlobalAlloc::Static(def_id) => {
             assert!(!tcx.is_thread_local_static(def_id));
@@ -1299,11 +1345,14 @@ fn collect_alloc<'tcx>(tcx: TyCtxt<'tcx>, alloc_id: AllocId, output: &mut MonoIt
             let ptrs = alloc.inner().provenance().ptrs();
             if !ptrs.is_empty() {
                 for &prov in ptrs.values() {
-                    collect_alloc(tcx, prov.alloc_id(), output);
+                    collect_alloc(tcx, prov.alloc_id(), source, output);
                 }
             }
         }
         GlobalAlloc::Function { instance, .. } => {
+            if reject_polyasm_witness_marker_reification(tcx, instance, source) {
+                return;
+            }
             if tcx.should_codegen_locally(instance) {
                 trace!("collecting {:?} with {:#?}", alloc_id, instance);
                 output.push(create_fn_mono_item(tcx, instance, DUMMY_SP));
@@ -1316,7 +1365,7 @@ fn collect_alloc<'tcx>(tcx: TyCtxt<'tcx>, alloc_id: AllocId, output: &mut MonoIt
                     .principal()
                     .map(|principal| tcx.instantiate_bound_regions_with_erased(principal)),
             ));
-            collect_alloc(tcx, alloc_id, output)
+            collect_alloc(tcx, alloc_id, source, output)
         }
         GlobalAlloc::TypeId { .. } => {}
     }
@@ -1338,6 +1387,12 @@ fn collect_items_of_instance<'tcx>(
     // We choose to emit the error outside to provide helpful diagnostics.
     check_normalization_error(tcx, instance, body)?;
     tcx.ensure_ok().check_mono_item(instance);
+
+    // A PolyASM marker is compile-time alone: every backend replaces its call
+    // with the compiler's decision and leaves the marker body unlowered.
+    if is_polyasm_witness_marker(tcx, instance.def_id()) {
+        return Ok((MonoItems::new(), MonoItems::new()));
+    }
 
     // Naively, in "used" collection mode, all functions get added to *both* `used_items` and
     // `mentioned_items`. Mentioned items processing will then notice that they have already been
@@ -1375,7 +1430,7 @@ fn collect_items_of_instance<'tcx>(
     // them errors.
     for const_op in body.required_consts() {
         if let Some(val) = collector.eval_constant(const_op) {
-            collect_const_value(tcx, val, &mut mentioned_items);
+            collect_const_value(tcx, val, const_op.span, &mut mentioned_items);
         }
     }
 
@@ -1463,14 +1518,17 @@ fn visit_mentioned_item<'tcx>(
 fn collect_const_value<'tcx>(
     tcx: TyCtxt<'tcx>,
     value: mir::ConstValue,
+    source: Span,
     output: &mut MonoItems<'tcx>,
 ) {
     match value {
         mir::ConstValue::Scalar(Scalar::Ptr(ptr, _size)) => {
-            collect_alloc(tcx, ptr.provenance.alloc_id(), output)
+            collect_alloc(tcx, ptr.provenance.alloc_id(), source, output)
         }
         mir::ConstValue::Indirect { alloc_id, .. }
-        | mir::ConstValue::Slice { alloc_id, meta: _ } => collect_alloc(tcx, alloc_id, output),
+        | mir::ConstValue::Slice { alloc_id, meta: _ } => {
+            collect_alloc(tcx, alloc_id, source, output)
+        }
         _ => {}
     }
 }
@@ -1676,7 +1734,7 @@ impl<'v> RootCollector<'_, 'v> {
                     let Ok(val) = self.tcx.const_eval_poly(def_id) else {
                         return;
                     };
-                    collect_const_value(self.tcx, val, self.output);
+                    collect_const_value(self.tcx, val, self.tcx.def_span(def_id), self.output);
                 }
             }
             DefKind::Impl { of_trait: true } => {
@@ -1751,10 +1809,15 @@ impl<'v> RootCollector<'_, 'v> {
     }
 
     fn is_root(&self, def_id: LocalDefId) -> bool {
-        !self.tcx.generics_of(def_id).requires_monomorphization(self.tcx)
-            && match self.strategy {
-                MonoItemCollectionStrategy::Eager => {
-                    !matches!(self.tcx.codegen_fn_attrs(def_id).inline, InlineAttr::Force { .. })
+        if self.tcx.generics_of(def_id).requires_monomorphization(self.tcx) {
+            return false;
+        }
+        if is_polyasm_entry(self.tcx, def_id.to_def_id()) {
+            return true;
+        }
+        match self.strategy {
+            MonoItemCollectionStrategy::Eager => {
+                !matches!(self.tcx.codegen_fn_attrs(def_id).inline, InlineAttr::Force { .. })
                     // comptime fns can't be codegenned, so we need to prevent collecting them even
                     // with link-dead-code. Lazy mode prevents them by them not showing up in
                     // `is_reachable_non_generic` (and `entry_fn` can't be comptime).
@@ -1764,19 +1827,19 @@ impl<'v> RootCollector<'_, 'v> {
                         }
                         _ => true,
                     }
-                }
-                MonoItemCollectionStrategy::Lazy => {
-                    self.entry_fn.and_then(|(id, _)| id.as_local()) == Some(def_id)
-                        || self.tcx.is_reachable_non_generic(def_id)
-                        || {
-                            let flags = self.tcx.codegen_fn_attrs(def_id).flags;
-                            flags.intersects(
-                                CodegenFnAttrFlags::RUSTC_STD_INTERNAL_SYMBOL
-                                    | CodegenFnAttrFlags::EXTERNALLY_IMPLEMENTABLE_ITEM,
-                            )
-                        }
-                }
             }
+            MonoItemCollectionStrategy::Lazy => {
+                self.entry_fn.and_then(|(id, _)| id.as_local()) == Some(def_id)
+                    || self.tcx.is_reachable_non_generic(def_id)
+                    || {
+                        let flags = self.tcx.codegen_fn_attrs(def_id).flags;
+                        flags.intersects(
+                            CodegenFnAttrFlags::RUSTC_STD_INTERNAL_SYMBOL
+                                | CodegenFnAttrFlags::EXTERNALLY_IMPLEMENTABLE_ITEM,
+                        )
+                    }
+            }
+        }
     }
 
     /// If `def_id` represents a root, pushes it onto the list of

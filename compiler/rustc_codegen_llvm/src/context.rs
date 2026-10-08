@@ -104,6 +104,8 @@ pub(crate) struct FullCx<'ll, 'tcx> {
     pub instances: RefCell<FxHashMap<Instance<'tcx>, &'ll Value>>,
     /// Cache instances of intrinsics
     pub intrinsic_instances: RefCell<FxHashMap<Instance<'tcx>, &'ll Value>>,
+    /// Whether a monomorphized call graph leaves through a packet opcode.
+    pub packet_exits: RefCell<FxHashMap<Instance<'tcx>, bool>>,
     /// Cache generated vtables
     pub vtables: RefCell<FxHashMap<(Ty<'tcx>, Option<ty::ExistentialTraitRef<'tcx>>), &'ll Value>>,
     /// Cache of constant strings,
@@ -704,6 +706,7 @@ impl<'ll, 'tcx> CodegenCx<'ll, 'tcx> {
                 codegen_unit,
                 instances: Default::default(),
                 intrinsic_instances: Default::default(),
+                packet_exits: Default::default(),
                 vtables: Default::default(),
                 const_str_cache: Default::default(),
                 const_globals: Default::default(),

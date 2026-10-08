@@ -633,6 +633,20 @@ pub trait BuilderMethods<'a, 'tcx>:
     /// Called for `StorageDead`
     fn lifetime_end(&mut self, ptr: Self::Value, size: Size);
 
+    /// Preserves the identity of a callable in the PolyASM executable graph
+    /// through backend optimization.
+    fn preserve_polyasm_callable(&mut self, _function: Self::Value) {}
+
+    /// Carries a source placement request on its emitted call instruction.
+    fn request_polyasm_call(
+        &mut self,
+        _call: Self::Value,
+        _function: Self::Value,
+        _property: &str,
+        _architecture: &str,
+    ) {
+    }
+
     /// "Finally codegen the call"
     ///
     /// ## Arguments

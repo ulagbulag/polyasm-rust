@@ -365,6 +365,7 @@ impl<'a> BootstrapCommand {
 
     /// Spawn the command in background, while capturing and returning stdout, and printing stderr.
     #[track_caller]
+    #[expect(dead_code, reason = "general-purpose, currently unused")]
     pub(crate) fn start_capture_stdout(
         &'a mut self,
         exec_ctx: impl AsRef<ExecutionContext>,

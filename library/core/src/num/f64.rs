@@ -2022,8 +2022,19 @@ pub mod math {
     #[inline]
     #[unstable(feature = "core_float_math", issue = "137578")]
     #[must_use = "method returns a new number and does not mutate the original value"]
+    #[rustc_allow_const_fn_unstable(const_eval_select)]
     pub const fn round(x: f64) -> f64 {
-        intrinsics::roundf64(x)
+        crate::cfg_select! {
+            target_abi = "polyasm" => intrinsics::const_eval_select!(
+                @capture { x: f64 } -> f64:
+                if const {
+                    intrinsics::roundf64(x)
+                } else {
+                    crate::polyasm::intrinsics::fround64(x)
+                }
+            ),
+            _ => intrinsics::roundf64(x),
+        }
     }
 
     /// Experimental version of `round_ties_even` in `core`. See [`f64::round_ties_even`] for

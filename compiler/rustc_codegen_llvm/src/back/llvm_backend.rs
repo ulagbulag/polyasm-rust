@@ -354,6 +354,9 @@ impl CodegenBackend for LlvmCodegenBackend {
             }
         }
 
+        if crate::polyasm::is_target(tcx.sess) {
+            rustc_codegen_ssa::polyasm::reject_hand_published_symbols(tcx);
+        }
         Box::new(rustc_codegen_ssa::base::codegen_crate(LlvmCodegenBackend(()), tcx))
     }
 
@@ -405,6 +408,16 @@ impl CodegenBackend for LlvmCodegenBackend {
         use rustc_codegen_ssa::back::link::link_binary;
 
         use crate::back::archive::LlvmArchiveBuilderBuilder;
+
+        // A PolyASM image goes through the emitter that owns the
+        // LLVM-to-PolyASM boundary in place of a platform linker: it is lowered
+        // out of the bitcode this run produced. Archives still go through
+        // `link_binary`, which `publish` calls itself for whatever crate types
+        // remain.
+        if crate::polyasm::is_target(sess) {
+            crate::polyasm::publish(sess, compiled_modules, crate_info, metadata, outputs);
+            return;
+        }
 
         // Run the linker on any artifacts that resulted from the LLVM run.
         // This should produce either a finished executable or library.

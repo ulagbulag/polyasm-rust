@@ -2047,6 +2047,8 @@ unsafe extern "C" {
     );
 
     // Operations on call sites
+    pub(crate) fn LLVMGetEnumAttributeKindForName(Name: *const c_char, SLen: size_t) -> c_uint;
+    pub(crate) fn LLVMRemoveCallSiteEnumAttribute(Instr: &Value, index: c_uint, KindID: c_uint);
     pub(crate) fn LLVMRustAddCallSiteAttributes<'a>(
         Instr: &'a Value,
         index: c_uint,
