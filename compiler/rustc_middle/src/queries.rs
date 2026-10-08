@@ -1332,6 +1332,20 @@ rustc_queries! {
         }
     }
 
+    /// Functions and closures named by PolyASM compiler markers in this crate.
+    /// These callable identities are semantic graph boundaries.
+    query polyasm_witness_def_ids(_: ()) -> &'tcx [DefId] {
+        desc { "collecting PolyASM witness callable identities" }
+    }
+
+    /// Whether one concrete function instance is a terminating, effect-free
+    /// wrapper around PolyASM compiler markers. Such wrappers carry zero runtime
+    /// operations, while the callable their markers name remains an independent
+    /// monomorphization and offload root.
+    query polyasm_witness_only_wrapper(key: ty::Instance<'tcx>) -> bool {
+        desc { "checking whether `{}` is a PolyASM witness-only wrapper", key }
+    }
+
     /// Computes the tag (if any) for a given type and variant.
     ///
     /// `None` means that the variant doesn't need a tag (because it is niched).

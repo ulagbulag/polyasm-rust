@@ -30,7 +30,7 @@ use rustc_span::edition::Edition;
 use rustc_span::source_map::SourceMapInputs;
 use rustc_span::{SessionGlobals, Symbol, sym};
 use rustc_structures::CrateType;
-use rustc_target::spec::{Arch, Target};
+use rustc_target::spec::{Arch, CfgAbi, Target};
 use tracing::info;
 
 use crate::diagnostics;
@@ -363,6 +363,14 @@ fn load_backend_from_dylib(early_dcx: &EarlyDiagCtxt, path: &Path) -> MakeBacken
     }
 }
 
+/// The backend a PolyASM toolchain lane compiles its PolyASM targets with,
+/// captured as `CFG_POLYASM_CODEGEN_BACKEND` when the lane builds.
+pub fn polyasm_lane_backend(target: &Target) -> Option<&'static str> {
+    (target.cfg_abi == CfgAbi::Polyasm)
+        .then_some(option_env!("CFG_POLYASM_CODEGEN_BACKEND"))
+        .flatten()
+}
+
 /// Get the codegen backend based on the name and specified sysroot.
 ///
 /// A name of `None` indicates that the default backend should be used.
@@ -376,6 +384,7 @@ pub fn get_codegen_backend(
 
     let load = LOAD.get_or_init(|| {
         let backend = backend_name
+            .or(polyasm_lane_backend(target))
             .or(target.default_codegen_backend.as_deref())
             .or(option_env!("CFG_DEFAULT_CODEGEN_BACKEND"))
             .unwrap_or("dummy");

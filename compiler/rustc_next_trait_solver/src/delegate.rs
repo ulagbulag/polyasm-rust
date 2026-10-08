@@ -10,6 +10,20 @@ use rustc_type_ir::{
     self as ty, CanonicalizerState, Const, InferCtxtLike, Interner, Region, TypeFoldable,
 };
 
+/// The compiler's decision on a goal of PolyASM's compiler-derived witness
+/// traits, the same decision the old solver's candidate assembly takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolyasmWitness {
+    /// The goal names another trait.
+    OtherTrait,
+    /// The goal still carries inference variables or generic parameters.
+    Ambiguous,
+    /// The compiler derived the witness.
+    Proven,
+    /// The compiler declined the witness.
+    Rejected,
+}
+
 /// `SolverDelegate` is one of the two traits in the `rustc_type_ir` shared abstraction layer
 /// between rustc and rust-analyzer abstracting over the [InferCtxt][inferctxt-doc], which had to be
 /// split due to coherence reasons:
@@ -117,6 +131,12 @@ pub trait SolverDelegate: Deref<Target = Self::Infcx> + Sized {
         dst: <Self::Interner as Interner>::Ty,
         assume: Const<Self::Interner>,
     ) -> Result<Answer<Region<Self::Interner>, <Self::Interner as Interner>::Ty>, NoSolution>;
+
+    /// Decides a goal on one of PolyASM's compiler-derived witness traits.
+    fn polyasm_witness(&self, trait_ref: ty::TraitRef<Self::Interner>) -> PolyasmWitness {
+        let _ = trait_ref;
+        PolyasmWitness::OtherTrait
+    }
 
     /// Obtain canonicalizer state, either by allocating it afresh (the default) or by reusing
     /// previously allocated state.

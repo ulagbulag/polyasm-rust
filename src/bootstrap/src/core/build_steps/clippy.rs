@@ -409,6 +409,78 @@ impl CommandLineStep for CodegenGcc {
     }
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct CodegenCranelift {
+    build_compiler: CompilerForCheck,
+    target: TargetSelection,
+    config: LintConfig,
+}
+
+impl CodegenCranelift {
+    fn new(builder: &Builder<'_>, target: TargetSelection, config: LintConfig) -> Self {
+        Self {
+            build_compiler: prepare_compiler_for_check(builder, target, Mode::Codegen),
+            target,
+            config,
+        }
+    }
+}
+
+impl CommandLineStep for CodegenCranelift {
+    type Output = ();
+
+    fn should_run(run: ShouldRun<'_>) -> ShouldRun<'_> {
+        run.alias("rustc_codegen_cranelift").alias("cg_clif")
+    }
+
+    fn make_run(run: RunConfig<'_>) {
+        let builder = run.builder;
+        let config = LintConfig::new(builder);
+        builder.ensure(CodegenCranelift::new(builder, run.target, config));
+    }
+
+    fn run(self, builder: &Builder<'_>) -> Self::Output {
+        let build_compiler = self.build_compiler.build_compiler();
+        let target = self.target;
+
+        let mut cargo = prepare_tool_cargo(
+            builder,
+            build_compiler,
+            Mode::Codegen,
+            target,
+            Kind::Clippy,
+            "compiler/rustc_codegen_cranelift",
+            SourceType::InTree,
+            &[],
+        );
+        // The PolyASM interchange link's path dependencies state the vendoring
+        // workspace's nightly as `rust-version`; see the build step.
+        cargo.arg("--ignore-rust-version");
+        self.build_compiler.configure_cargo(&mut cargo);
+
+        let _guard = builder.msg(
+            Kind::Clippy,
+            "rustc_codegen_cranelift",
+            Mode::ToolRustcPrivate,
+            build_compiler,
+            target,
+        );
+
+        let stamp = BuildStamp::new(&builder.cargo_out(build_compiler, Mode::Codegen, target))
+            .with_prefix("rustc_codegen_cranelift-check");
+
+        let args = lint_args(builder, &self.config, IGNORED_RULES_FOR_STD_AND_RUSTC);
+        run_cargo(builder, cargo, args, &stamp, vec![], ArtifactKeepMode::OnlyRmeta);
+    }
+
+    fn metadata(&self) -> Option<StepMetadata> {
+        Some(
+            StepMetadata::clippy("rustc_codegen_cranelift", self.target)
+                .built_by(self.build_compiler.build_compiler()),
+        )
+    }
+}
+
 macro_rules! lint_any {
     ($(
         $name:ident,

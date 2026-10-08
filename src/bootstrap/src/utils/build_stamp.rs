@@ -12,7 +12,7 @@ use crate::core::builder::Builder;
 use crate::core::compiler::Compiler;
 use crate::core::config::TargetSelection;
 use crate::core::session::Mode;
-use crate::utils::helpers::{self, hex_encode, mtime, t};
+use crate::utils::helpers::{hex_encode, mtime, t};
 
 #[cfg(test)]
 mod tests;
@@ -163,44 +163,51 @@ pub fn librustc_stamp(
     BuildStamp::new(&builder.cargo_out(build_compiler, Mode::Rustc, target)).with_prefix("librustc")
 }
 
-/// Computes a hash representing the state of a repository/submodule and additional input.
+/// Computes a SHA-256 stamp of the state of a repository/submodule and additional input.
 ///
-/// It uses `git diff` for the actual changes, and `git status` for including the untracked
-/// files in the specified directory. The additional input is also incorporated into the
-/// computation of the hash.
+/// The state is the path, length and modification time of every file under `dir`, read from
+/// the filesystem in sorted order with `target` and `.git` directories skipped; the additional
+/// input joins it in the same SHA-256 computation.
 ///
 /// # Parameters
 ///
 /// - `dir`: A reference to the directory path of the target repository/submodule.
-/// - `additional_input`: An additional input to be included in the hash.
-///
-/// # Panics
-///
-/// In case of errors during `git` command execution (e.g., in tarball sources), default values
-/// are used to prevent panics.
+/// - `additional_input`: An additional input to be included in the stamp.
 pub fn generate_smart_stamp_hash(
     builder: &Builder<'_>,
     dir: &Path,
     additional_input: &str,
 ) -> String {
-    let diff = helpers::git(Some(dir))
-        .allow_failure()
-        .arg("diff")
-        .arg(".")
-        .run_capture_stdout(builder)
-        .stdout_if_ok()
-        .unwrap_or_default();
-
-    let status = helpers::git(Some(dir))
-        .allow_failure()
-        .arg("status")
-        .arg(".")
-        .arg("--porcelain")
-        .arg("-z")
-        .arg("--untracked-files=normal")
-        .run_capture_stdout(builder)
-        .stdout_if_ok()
-        .unwrap_or_default();
+    // The PolyASM source policy runs Git-free, so the working tree's state
+    // comes from the filesystem. Walking `dir` for each file's path, length and
+    // modification time answers the same question the diff and status answered
+    // -- has anything under here changed since the artefact was stamped -- from
+    // the files alone.
+    let _ = builder;
+    let mut state = String::new();
+    let mut pending = ::std::collections::VecDeque::from([dir.to_path_buf()]);
+    while let Some(directory) = pending.pop_front() {
+        let Ok(entries) = ::std::fs::read_dir(&directory) else { continue };
+        let mut sorted: Vec<_> = entries.flatten().map(|entry| entry.path()).collect();
+        sorted.sort();
+        for path in sorted {
+            let Ok(metadata) = ::std::fs::symlink_metadata(&path) else { continue };
+            if metadata.is_dir() {
+                if path.file_name().is_some_and(|name| name == "target" || name == ".git") {
+                    continue;
+                }
+                pending.push_back(path);
+                continue;
+            }
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(::std::time::UNIX_EPOCH).ok())
+                .map_or(0, |since| since.as_nanos());
+            state.push_str(&format!("{}\0{}\0{}\n", path.display(), metadata.len(), modified));
+        }
+    }
+    let (diff, status) = (String::new(), state);
 
     let mut hasher = sha2::Sha256::new();
 

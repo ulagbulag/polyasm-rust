@@ -149,6 +149,10 @@ fn u64_by_u64_div_rem(duo: u64, div: u64) -> (u64, u64) {
 #[cfg(all(
     any(
         target_family = "wasm",
+        // PolyASM's pointers are 32 bits wide but its executor runs on a
+        // 64-bit host, so it wants the same wide implementation WebAssembly
+        // takes for the same reason.
+        target_abi = "polyasm",
         not(any(target_pointer_width = "16", target_pointer_width = "32")),
     ),
     not(all(feature = "arch", target_arch = "x86_64")),
@@ -170,6 +174,7 @@ impl_trifecta!(
 #[cfg(all(
     not(any(
         target_family = "wasm",
+        target_abi = "polyasm",
         not(any(target_pointer_width = "16", target_pointer_width = "32")),
     )),
     not(all(feature = "arch", target_arch = "x86_64")),

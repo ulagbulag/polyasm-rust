@@ -14,7 +14,7 @@ use rustc_middle::mir::AssertMessage;
 use rustc_middle::mir::interpret::ReportedErrorInfo;
 use rustc_middle::query::TyCtxtAt;
 use rustc_middle::ty::layout::{HasTyCtxt, HasTypingEnv, TyAndLayout, ValidityRequirement};
-use rustc_middle::ty::{self, FieldInfo, ScalarInt, Ty, TyCtxt};
+use rustc_middle::ty::{self, FieldInfo, ScalarInt, Ty, TyCtxt, TypeVisitableExt};
 use rustc_middle::{mir, throw_machine_stop};
 use rustc_span::{Span, Symbol, bug, span_bug, sym};
 use rustc_target::callconv::FnAbi;
@@ -459,6 +459,12 @@ impl<'tcx> interpret::Machine<'tcx> for CompileTimeMachine<'tcx> {
                     span_bug!(ecx.cur_span(), "calling non-const function `{}`", instance)
                 }
             }
+        }
+
+        // The compiler reads each callable after each argument of the callable takes a concrete
+        // form, so a concrete call here takes the PolyASM recheck of a code-generated instance.
+        if !instance.args.has_non_region_param() {
+            ecx.tcx.check_polyasm_always_predicates(instance);
         }
 
         // This is a const fn. Call it.

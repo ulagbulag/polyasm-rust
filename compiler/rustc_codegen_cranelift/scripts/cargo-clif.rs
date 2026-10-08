@@ -3,7 +3,7 @@ use std::env;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
-include!("../build_system/shared_utils.rs");
+use cg_clif_build_system::{rustflags_from_env, rustflags_to_cmd_env};
 
 fn main() {
     let current_exe = env::current_exe().unwrap();

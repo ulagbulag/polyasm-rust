@@ -220,8 +220,8 @@ fn is_end_eq_array_len<'tcx>(
         && let Some(arr_len) = arr_len_const.try_to_target_usize(cx.tcx)
     {
         return match range_ty.limits() {
-            ast::RangeLimits::Closed => end_int.get() + 1 >= arr_len.into(),
-            ast::RangeLimits::HalfOpen => end_int.get() >= arr_len.into(),
+            ast::RangeLimits::Closed => end_int.get() + 1 >= u128::from(arr_len),
+            ast::RangeLimits::HalfOpen => end_int.get() >= u128::from(arr_len),
         };
     }
 

@@ -418,8 +418,15 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
 
             let temps_dir = config.opts.unstable_opts.temps_dir.as_deref().map(PathBuf::from);
 
-            let early_sess =
-                rustc_session::build_early_session(config.opts, target, config.ice_file);
+            let mut opts = config.opts;
+            if opts.unstable_opts.codegen_backend.is_none()
+                && let Some(lane) = util::polyasm_lane_backend(&target)
+            {
+                // The lane stands as the requested backend, so the
+                // incremental caches of two toolchain lanes stay apart.
+                opts.unstable_opts.codegen_backend = Some(lane.to_owned());
+            }
+            let early_sess = rustc_session::build_early_session(opts, target, config.ice_file);
 
             let mut codegen_backend = match config.make_codegen_backend {
                 None => util::get_codegen_backend(
@@ -452,6 +459,13 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
 
             // STACK_SIZE is setup in run_in_thread_pool_with_globals, before arriving here.
             sess.opts.recommended_stack_size = *util::STACK_SIZE.get().unwrap();
+
+            if sess.is_polyasm_target() && !matches!(codegen_backend.name(), "cranelift" | "llvm") {
+                sess.dcx().fatal(format!(
+                    "the PolyASM target requires a codegen backend that emits `.poly` bytecode; `{}` does not",
+                    codegen_backend.name()
+                ));
+            }
 
             let target_config = codegen_backend.target_config(&sess);
 

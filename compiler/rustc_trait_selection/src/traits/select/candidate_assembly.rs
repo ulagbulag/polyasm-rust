@@ -24,6 +24,7 @@ use tracing::{debug, instrument, trace};
 use super::SelectionCandidate::*;
 use super::{SelectionCandidateSet, SelectionContext, TraitObligationStack};
 use crate::traits::query::evaluate_obligation::InferCtxtExt;
+use crate::traits::select::polyasm::{self, WitnessDecision};
 use crate::traits::util;
 
 impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
@@ -55,6 +56,32 @@ impl<'cx, 'tcx> SelectionContext<'cx, 'tcx> {
         }
 
         let mut candidates = SelectionCandidateSet { vec: Vec::new(), ambiguous: false };
+
+        let polyasm_decision = if obligation.polarity() == ty::ClausePolarity::Positive {
+            polyasm::decide(self.tcx(), obligation.predicate.skip_binder().trait_ref)
+        } else {
+            WitnessDecision::OtherTrait
+        };
+        match polyasm_decision {
+            WitnessDecision::OtherTrait => {}
+            WitnessDecision::Proven => {
+                candidates.vec.push(BuiltinCandidate);
+                return Ok(candidates);
+            }
+            WitnessDecision::Ambiguous => {
+                // Only genuinely unresolved generic markers come from an impl
+                // or caller bound. Once the compiler has declined a concrete
+                // callable, source-level predicates keep that decision as is.
+                self.assemble_candidates_for_trait_alias(obligation, &mut candidates);
+                self.assemble_candidates_from_impls(obligation, &mut candidates);
+                self.assemble_candidates_from_caller_bounds(stack, &mut candidates)?;
+                if candidates.vec.is_empty() {
+                    candidates.ambiguous = true;
+                }
+                return Ok(candidates);
+            }
+            WitnessDecision::Rejected => return Ok(candidates),
+        }
 
         // Negative trait predicates have different rules than positive trait predicates.
         if obligation.polarity() == ty::ClausePolarity::Negative {

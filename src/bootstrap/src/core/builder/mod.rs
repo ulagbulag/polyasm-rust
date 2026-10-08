@@ -824,6 +824,7 @@ impl<'a> Builder<'a> {
                 clippy::BuildManifest,
                 clippy::CargoMiri,
                 clippy::Clippy,
+                clippy::CodegenCranelift,
                 clippy::CodegenGcc,
                 clippy::CollectLicenseMetadata,
                 clippy::Compiletest,

@@ -7,6 +7,10 @@ edition = "2021"
 name = "y"
 path = "main.rs"
 
+[lib]
+name = "cg_clif_build_system"
+path = "shared_utils.rs"
+
 [features]
 unstable-features = [] # for rust-analyzer
 

@@ -31,7 +31,7 @@ use crate::canonical::{
     response_no_constraints_raw,
 };
 use crate::coherence;
-use crate::delegate::SolverDelegate;
+use crate::delegate::{PolyasmWitness, SolverDelegate};
 use crate::normalize::{NormalizationFolder, NormalizationWasAmbiguous};
 use crate::placeholder::BoundVarReplacer;
 use crate::solve::eval_ctxt::fast_path::{
@@ -1568,6 +1568,10 @@ where
         assume: Const<I>,
     ) -> Result<Answer<Region<I>, I::Ty>, NoSolution> {
         self.delegate.is_transmutable(dst, src, assume)
+    }
+
+    pub(super) fn polyasm_witness(&self, trait_ref: ty::TraitRef<I>) -> PolyasmWitness {
+        self.delegate.polyasm_witness(trait_ref)
     }
 
     pub(super) fn replace_bound_vars<T: TypeFoldable<I>>(

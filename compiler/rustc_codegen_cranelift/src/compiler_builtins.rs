@@ -4,6 +4,8 @@ use std::ffi::c_int;
 use std::ffi::c_void;
 
 use cranelift_codegen::ir::{Type, types};
+use rustc_session::Session;
+use rustc_target::spec::Arch;
 
 // FIXME replace with core::ffi::c_size_t once stabilized
 #[allow(non_camel_case_types)]
@@ -16,20 +18,25 @@ type size_t = usize;
 #[cfg(any(target_arch = "aarch64", target_arch = "arm64ec"))]
 #[cfg(feature = "jit")]
 type CmpResult = i32;
-#[cfg(any(target_arch = "aarch64", target_arch = "arm64ec"))]
-pub(crate) const CMP_RESULT_TY: Type = types::I32;
-
 // In compiler-rt, LLP64 ABIs use `long long` and everything else uses `long`. In effect,
 // this means the return value is always pointer-sized.
 #[cfg(not(any(target_arch = "aarch64", target_arch = "arm64ec")))]
 #[cfg(feature = "jit")]
 type CmpResult = isize;
-#[cfg(not(any(target_arch = "aarch64", target_arch = "arm64ec")))]
-#[cfg(target_pointer_width = "32")]
-pub(crate) const CMP_RESULT_TY: Type = types::I32;
-#[cfg(not(any(target_arch = "aarch64", target_arch = "arm64ec")))]
-#[cfg(target_pointer_width = "64")]
-pub(crate) const CMP_RESULT_TY: Type = types::I64;
+pub(crate) fn cmp_result_ty(sess: &Session) -> Type {
+    match sess.target.arch {
+        Arch::AArch64 | Arch::Arm64EC | Arch::Wasm32 | Arch::Wasm64 => return types::I32,
+        Arch::Avr => return types::I8,
+        _ => {}
+    }
+
+    match sess.target.pointer_width {
+        16 => types::I16,
+        32 => types::I32,
+        64 => types::I64,
+        width => unreachable!("unsupported target pointer width: {width}"),
+    }
+}
 
 macro_rules! builtin_functions {
     (

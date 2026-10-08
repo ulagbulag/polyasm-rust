@@ -27,5 +27,6 @@ pub mod filesearch;
 mod macros;
 mod options;
 pub mod output;
+pub mod polyasm;
 pub mod search_paths;
 mod session;

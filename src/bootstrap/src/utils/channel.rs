@@ -9,7 +9,6 @@ use std::fs;
 use std::path::Path;
 
 use super::exec::ExecutionContext;
-use super::helpers;
 use crate::core::session::Session;
 use crate::utils::helpers::t;
 
@@ -18,10 +17,6 @@ pub enum GitInfo {
     /// This is not a git repository.
     #[default]
     Absent,
-    /// This is a git repository.
-    /// If the info should be used (`omit_git_hash` is false), this will be
-    /// `Some`, otherwise it will be `None`.
-    Present(Option<Info>),
     /// This is not a git repository, but the info can be fetched from the
     /// `git-commit-info` file.
     RecordedForTarball(Info),
@@ -35,66 +30,19 @@ pub struct Info {
 }
 
 impl GitInfo {
-    pub fn new(omit_git_hash: bool, dir: &Path, exec_ctx: impl AsRef<ExecutionContext>) -> GitInfo {
-        // See if this even begins to look like a git dir
-        if !dir.join(".git").exists() {
-            match read_commit_info_file(dir) {
-                Some(info) => return GitInfo::RecordedForTarball(info),
-                None => return GitInfo::Absent,
-            }
+    pub fn new(_omit_git_id: bool, dir: &Path, _exec_ctx: impl AsRef<ExecutionContext>) -> GitInfo {
+        // PolyASM runs Git-free, read-only version discovery included.
+        // A packaged source provides immutable recorded metadata; a live
+        // checkout is otherwise treated as an unmanaged source tree.
+        match read_commit_info_file(dir) {
+            Some(info) => GitInfo::RecordedForTarball(info),
+            None => GitInfo::Absent,
         }
-
-        let mut git_command = helpers::git(Some(dir));
-        git_command.arg("rev-parse");
-        let output = git_command.allow_failure().run_capture(&exec_ctx);
-
-        if output.is_failure() {
-            return GitInfo::Absent;
-        }
-
-        // If we're ignoring the git info, we don't actually need to collect it, just make sure this
-        // was a git repo in the first place.
-        if omit_git_hash {
-            return GitInfo::Present(None);
-        }
-
-        // Ok, let's scrape some info
-        // We use the command's spawn API to execute these commands concurrently, which leads to performance improvements.
-        let mut git_log_cmd = helpers::git(Some(dir));
-        let ver_date = git_log_cmd
-            .arg("log")
-            .arg("-1")
-            .arg("--date=short")
-            .arg("--pretty=format:%cd")
-            .run_in_dry_run()
-            .start_capture_stdout(&exec_ctx);
-
-        let mut git_hash_cmd = helpers::git(Some(dir));
-        let ver_hash = git_hash_cmd
-            .arg("rev-parse")
-            .arg("HEAD")
-            .run_in_dry_run()
-            .start_capture_stdout(&exec_ctx);
-
-        let mut git_short_hash_cmd = helpers::git(Some(dir));
-        let short_ver_hash = git_short_hash_cmd
-            .arg("rev-parse")
-            .arg("--short=9")
-            .arg("HEAD")
-            .run_in_dry_run()
-            .start_capture_stdout(&exec_ctx);
-
-        GitInfo::Present(Some(Info {
-            commit_date: ver_date.wait_for_output(&exec_ctx).stdout().trim().to_string(),
-            sha: ver_hash.wait_for_output(&exec_ctx).stdout().trim().to_string(),
-            short_sha: short_ver_hash.wait_for_output(&exec_ctx).stdout().trim().to_string(),
-        }))
     }
 
     pub fn info(&self) -> Option<&Info> {
         match self {
             GitInfo::Absent => None,
-            GitInfo::Present(info) => info.as_ref(),
             GitInfo::RecordedForTarball(info) => Some(info),
         }
     }
@@ -127,14 +75,13 @@ impl GitInfo {
     pub fn is_managed_git_subrepository(&self) -> bool {
         match self {
             GitInfo::Absent | GitInfo::RecordedForTarball(_) => false,
-            GitInfo::Present(_) => true,
         }
     }
 
     /// Returns whether this is being built from a tarball.
     pub fn is_from_tarball(&self) -> bool {
         match self {
-            GitInfo::Absent | GitInfo::Present(_) => false,
+            GitInfo::Absent => false,
             GitInfo::RecordedForTarball(_) => true,
         }
     }

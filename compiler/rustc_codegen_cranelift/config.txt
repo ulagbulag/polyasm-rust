@@ -23,6 +23,7 @@ aot.powi_libcall_signature
 aot.issue-72793
 aot.issue-59326
 aot.gen_block_iterate
+aot.repeat-wide-const
 aot.raw-dylib
 test.sysroot
 

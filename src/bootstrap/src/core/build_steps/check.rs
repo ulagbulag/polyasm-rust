@@ -593,6 +593,9 @@ impl CommandLineStep for CraneliftCodegenBackend {
         cargo
             .arg("--manifest-path")
             .arg(builder.src.join("compiler/rustc_codegen_cranelift/Cargo.toml"));
+        // The PolyASM interchange link's path dependencies state the vendoring
+        // workspace's nightly as `rust-version`; see the build step.
+        cargo.arg("--ignore-rust-version");
         self.build_compiler.configure_cargo(&mut cargo);
 
         let _guard = builder.msg(

@@ -3,11 +3,12 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+use cg_clif_build_system::rustflags_from_env;
+
 use crate::build_sysroot::{SysrootConfig, SysrootKind};
 use crate::path::{Dirs, RelPath};
 use crate::prepare::{GitRepo, apply_patches};
 use crate::rustc_info::get_default_sysroot;
-use crate::shared_utils::rustflags_from_env;
 use crate::utils::{CargoProject, Compiler, LogGroup, ensure_empty_dir, spawn_and_wait};
 use crate::{CodegenBackend, build_sysroot, config};
 

@@ -130,6 +130,12 @@ pub fn filename_for_input(
 
 /// Checks if target supports crate_type as output
 pub fn invalid_output_for_target(sess: &Session, crate_type: CrateType) -> bool {
+    // PolyASM uses `cdylib` as Cargo's final-image crate container; the target
+    // deliberately leaves dynamic linking out.
+    if is_polyasm_final_image(sess.is_polyasm_target(), crate_type) {
+        return false;
+    }
+
     if let CrateType::Cdylib | CrateType::Dylib | CrateType::ProcMacro = crate_type {
         if !sess.target.dynamic_linking {
             return true;
@@ -157,4 +163,8 @@ pub fn invalid_output_for_target(sess: &Session, crate_type: CrateType) -> bool 
     }
 
     false
+}
+
+fn is_polyasm_final_image(is_polyasm_target: bool, crate_type: CrateType) -> bool {
+    is_polyasm_target && matches!(crate_type, CrateType::Cdylib)
 }

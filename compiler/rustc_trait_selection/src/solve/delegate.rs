@@ -26,6 +26,7 @@ use rustc_middle::ty::{
     self, CanonicalizerState, MayBeErased, Region, Ty, TyCtxt, TypeFlags, TypeFoldable,
     TypeSuperVisitable, TypeVisitable, TypeVisitableExt, TypeVisitor, TypingMode,
 };
+use rustc_next_trait_solver::delegate::PolyasmWitness;
 use rustc_next_trait_solver::solve::{GoalStalledOn, GoalStalledOnOpaques, TyOrConstInferVar};
 use rustc_span::{DUMMY_SP, Span};
 use rustc_structures::Limit;
@@ -34,6 +35,7 @@ use thin_vec::{ThinVec, thin_vec};
 
 use super::inspect::InferCtxtProofTreeExt;
 use crate::solve::inspect::{self, InspectConfig, ProofTreeVisitor};
+use crate::traits::select::polyasm::{self, WitnessDecision};
 use crate::traits::{EvaluateConstErr, ObligationCause, sizedness_fast_path, specialization_graph};
 
 #[repr(transparent)]
@@ -497,6 +499,15 @@ impl<'tcx> rustc_next_trait_solver::delegate::SolverDelegate for SolverDelegate<
         rustc_transmute::Assume::from_const(self.tcx, assume)
             .map(|assume| TransmuteTypeEnv::new(self.0.tcx).is_transmutable(src, dst, assume))
             .ok_or(NoSolution)
+    }
+
+    fn polyasm_witness(&self, trait_ref: ty::TraitRef<'tcx>) -> PolyasmWitness {
+        match polyasm::decide(self.tcx, trait_ref) {
+            WitnessDecision::OtherTrait => PolyasmWitness::OtherTrait,
+            WitnessDecision::Ambiguous => PolyasmWitness::Ambiguous,
+            WitnessDecision::Proven => PolyasmWitness::Proven,
+            WitnessDecision::Rejected => PolyasmWitness::Rejected,
+        }
     }
 
     fn obtain_canonicalizer_state(&self) -> CanonicalizerState<Self::Interner> {

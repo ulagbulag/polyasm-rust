@@ -247,13 +247,13 @@ macro_rules! step_signed_methods {
         #[inline]
         unsafe fn forward_unchecked(start: Self, n: usize) -> Self {
             // SAFETY: the caller has to guarantee that `start + n` doesn't overflow.
-            unsafe { start.checked_add_unsigned(n as $unsigned).unwrap_unchecked() }
+            start.wrapping_add_unsigned(n as $unsigned)
         }
 
         #[inline]
         unsafe fn backward_unchecked(start: Self, n: usize) -> Self {
             // SAFETY: the caller has to guarantee that `start - n` doesn't overflow.
-            unsafe { start.checked_sub_unsigned(n as $unsigned).unwrap_unchecked() }
+            start.wrapping_sub_unsigned(n as $unsigned)
         }
     };
 }

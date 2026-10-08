@@ -1,6 +1,7 @@
 //! SSA analysis
 
 use rustc_index::IndexVec;
+use rustc_middle::mir::PlaceElem;
 use rustc_middle::mir::StatementKind::*;
 
 use crate::prelude::*;
@@ -25,6 +26,8 @@ pub(crate) fn analyze(fx: &FunctionCx<'_, '_, '_>) -> IndexVec<Local, SsaKind> {
         for stmt in bb.statements.iter() {
             if let Assign(place_and_rval) = &stmt.kind
                 && let Rvalue::Ref(_, _, place) | Rvalue::RawPtr(_, place) = &place_and_rval.1
+                && !(matches!(place_and_rval.1, Rvalue::RawPtr(..))
+                    && matches!(place.projection.first(), Some(PlaceElem::Deref)))
             {
                 flag_map[place.local] = SsaKind::NotSsa;
             }

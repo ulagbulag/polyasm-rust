@@ -31,7 +31,8 @@ fn main() {
 
     // Forcibly enable memory intrinsics on wasm & SGX as we don't have a libc to
     // provide them.
-    if (cfg.target_triple.contains("wasm") && !cfg.target_triple.contains("wasi"))
+    if (cfg.target_arch.starts_with("wasm") && !cfg.target_triple.contains("wasi"))
+        || cfg.target_triple.contains("polyasm")
         || (cfg.target_triple.contains("sgx") && cfg.target_triple.contains("fortanix"))
         || cfg.target_triple.contains("-none")
         || cfg.target_triple.contains("nvptx")
@@ -72,6 +73,12 @@ fn main() {
 
     // Everything is LLVM bitcode, not compatible with mixed C/Rust
     if cfg.target_arch.contains("nvptx") {
+        maybe_build_c = false;
+    }
+
+    // PolyASM is a bytecode the toolchain lowers itself, so every C compiler
+    // and every C object stays outside its build.
+    if cfg.target_triple.contains("polyasm") {
         maybe_build_c = false;
     }
 

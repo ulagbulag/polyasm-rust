@@ -112,7 +112,7 @@ use rustc_middle::middle::exported_symbols::{SymbolExportInfo, SymbolExportLevel
 use rustc_middle::mir::StatementKind;
 use rustc_middle::mono::{
     CodegenUnit, CodegenUnitNameBuilder, InstantiationMode, MonoItem, MonoItemData,
-    MonoItemPartitions, Visibility,
+    MonoItemPartitions, Visibility, is_polyasm_entry_instance,
 };
 use rustc_middle::ty::print::{characteristic_def_id_of_type, with_no_trimmed_paths};
 use rustc_middle::ty::{self, InstanceKind, ShimKind, TyCtxt};
@@ -855,11 +855,10 @@ fn mono_item_visibility<'tcx>(
         );
     }
 
-    // Both the `start_fn` lang item and `main` itself should not be exported,
-    // so we give them with `Hidden` visibility but these symbols are
-    // only referenced from the actual `main` symbol which we unfortunately
-    // don't know anything about during partitioning/collection. As a result we
-    // forcibly keep this symbol out of the `internalization_candidates` set.
+    // The `start_fn` lang item, `main`, and the compiler-selected PolyASM source
+    // entry stay unexported, so we give them `Hidden` visibility. Entry metadata
+    // outside partitioning's view references these symbols, so they stay out of
+    // the `internalization_candidates` set.
     //
     // FIXME: eventually we don't want to always force this symbol to have
     //        hidden visibility, it should indeed be a candidate for
@@ -867,7 +866,7 @@ fn mono_item_visibility<'tcx>(
     //        from the `main` symbol we'll generate later.
     //
     //        This may be fixable with a new `InstanceKind` perhaps? Unsure!
-    if tcx.is_entrypoint(def_id) {
+    if tcx.is_entrypoint(def_id) || is_polyasm_entry_instance(tcx, *instance) {
         *can_be_internalized = false;
         return Visibility::Hidden;
     }

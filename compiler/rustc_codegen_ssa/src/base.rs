@@ -41,8 +41,9 @@ use tracing::{debug, info};
 use crate::assert_module_sources::CguReuse;
 use crate::back::link::are_upstream_rust_objects_already_included;
 use crate::back::write::{
-    ComputedLtoType, ModuleConfig, OngoingCodegen, compute_per_cgu_lto_type, start_async_codegen,
-    submit_codegened_module_to_llvm, submit_post_lto_module_to_llvm, submit_pre_lto_module_to_llvm,
+    ComputedLtoType, ModuleConfig, OngoingCodegen, compute_per_cgu_lto_type, coordinator_lto,
+    start_async_codegen, submit_codegened_module_to_llvm, submit_post_lto_module_to_llvm,
+    submit_pre_lto_module_to_llvm,
 };
 use crate::common::{self, IntPredicate, RealPredicate, TypeKind};
 use crate::meth::load_vtable;
@@ -681,7 +682,7 @@ pub fn allocator_kind_for_codegen(tcx: TyCtxt<'_>) -> Option<AllocatorKind> {
 /// Decide if this particular crate type needs an allocator shim linked in.
 /// This may return true even when allocator_kind_for_codegen returns false. In
 /// this case no allocator shim shall be linked.
-pub(crate) fn needs_allocator_shim_for_linking(
+pub fn needs_allocator_shim_for_linking(
     dependency_formats: &Dependencies,
     crate_type: CrateType,
 ) -> bool {
@@ -1285,7 +1286,7 @@ pub fn determine_cgu_reuse<'tcx>(tcx: TyCtxt<'tcx>, cgu: &CodegenUnit<'tcx>) -> 
         // being performed then we can use post-LTO artifacts, otherwise we must
         // reuse pre-LTO artifacts
         match compute_per_cgu_lto_type(
-            &tcx.sess.lto(),
+            &coordinator_lto(tcx),
             tcx.sess.opts.cg.linker_plugin_lto.enabled(),
             tcx.crate_types(),
         ) {

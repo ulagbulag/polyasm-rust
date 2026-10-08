@@ -42,6 +42,7 @@ fn main() {
         || target_os == "vxworks"
         || target_arch == "wasm32"
         || target_arch == "wasm64"
+        || target_arch == "polyasm"
         || target_os == "espidf"
         || target_os.starts_with("solid")
         || (target_vendor == "nintendo" && target_env == "newlib")

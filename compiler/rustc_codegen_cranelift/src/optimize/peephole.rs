@@ -44,3 +44,12 @@ pub(crate) fn maybe_known_branch_taken(
         _ => None,
     }
 }
+
+pub(crate) fn maybe_known_iconst(bcx: &FunctionBuilder<'_>, arg: Value) -> Option<i64> {
+    let ValueDef::Result(arg_inst, 0) = bcx.func.dfg.value_def(arg) else { return None };
+
+    match bcx.func.dfg.insts[arg_inst] {
+        InstructionData::UnaryImm { opcode: Opcode::Iconst, imm } => Some(imm.bits()),
+        _ => None,
+    }
+}

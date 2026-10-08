@@ -45,6 +45,12 @@ if __name__ == "__main__":
         warnings.warn(msg, stacklevel=1)
 
     rust_dir = os.path.dirname(os.path.abspath(__file__))
+    # This source tree runs Git-free. A fail-closed executable goes in
+    # front of PATH before importing bootstrap, so every descendant process,
+    # build scripts included, inherits the same boundary.
+    no_git_dir = os.path.join(rust_dir, "src", "bootstrap", "no-git")
+    os.environ["PATH"] = no_git_dir + os.pathsep + os.environ.get("PATH", "")
+    os.environ["CFG_OMIT_GIT_HASH"] = "1"
     # For the import below, have Python search in src/bootstrap first.
     sys.path.insert(0, os.path.join(rust_dir, "src", "bootstrap"))
 

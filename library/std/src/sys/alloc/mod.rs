@@ -24,6 +24,7 @@ const MIN_ALIGN: usize = if cfg!(any(
     target_arch = "powerpc64",
     target_arch = "sparc",
     target_arch = "wasm32",
+    all(target_arch = "polyasm", target_pointer_width = "32"),
     target_arch = "hexagon",
     target_arch = "riscv32",
     target_arch = "xtensa",
@@ -40,6 +41,7 @@ const MIN_ALIGN: usize = if cfg!(any(
     target_arch = "sparc64",
     target_arch = "riscv64",
     target_arch = "wasm64",
+    all(target_arch = "polyasm", target_pointer_width = "64"),
 )) {
     16
 } else {
@@ -95,6 +97,10 @@ cfg_select! {
     target_os = "vexos" => {
         mod vexos;
         use vexos as imp;
+    }
+    target_abi = "polyasm" => {
+        mod polyasm;
+        use polyasm as imp;
     }
     target_family = "wasm" => {
         mod wasm;

@@ -16,7 +16,6 @@ mod config;
 mod path;
 mod prepare;
 mod rustc_info;
-mod shared_utils;
 mod tests;
 mod todo;
 mod utils;

@@ -93,6 +93,10 @@ declare_hooks! {
     /// of a normal function because external tools might want to override it.
     hook should_codegen_locally(instance: crate::ty::Instance<'tcx>) -> bool;
 
+    /// Rechecks the PolyASM `Always` predicates of one instance that constant evaluation calls,
+    /// the same way monomorphization rechecks every code-generated instance.
+    hook check_polyasm_always_predicates(instance: crate::ty::Instance<'tcx>) -> ();
+
     hook alloc_self_profile_query_strings() -> ();
 
     /// Saves and writes the DepGraph to the file system.

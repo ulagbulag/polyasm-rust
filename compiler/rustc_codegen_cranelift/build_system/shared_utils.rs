@@ -1,7 +1,7 @@
-// This file is used by both the build system as well as cargo-clif.rs
+//! Shared command-line flag handling for the build system and `cargo-clif`.
 
 // Adapted from https://github.com/rust-lang/cargo/blob/6dc1deaddf62c7748c9097c7ea88e9ec77ff1a1a/src/cargo/core/compiler/build_context/target_info.rs#L750-L77
-pub(crate) fn rustflags_from_env(kind: &str) -> Vec<String> {
+pub fn rustflags_from_env(kind: &str) -> Vec<String> {
     // First try CARGO_ENCODED_RUSTFLAGS from the environment.
     // Prefer this over RUSTFLAGS since it's less prone to encoding errors.
     if let Ok(a) = std::env::var(format!("CARGO_ENCODED_{}", kind)) {
@@ -21,6 +21,6 @@ pub(crate) fn rustflags_from_env(kind: &str) -> Vec<String> {
     Vec::new()
 }
 
-pub(crate) fn rustflags_to_cmd_env(cmd: &mut std::process::Command, kind: &str, flags: &[String]) {
+pub fn rustflags_to_cmd_env(cmd: &mut std::process::Command, kind: &str, flags: &[String]) {
     cmd.env(format!("CARGO_ENCODED_{}", kind), flags.join("\x1f"));
 }

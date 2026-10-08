@@ -39,6 +39,10 @@ const STAGE0_MISSING_TARGETS: &[&str] = &[
     "aarch64-unknown-qtee",
 ];
 
+fn has_no_native_c_abi(target: &crate::core::config::TargetSelection) -> bool {
+    target.contains("wasm32") || target.is_polyasm()
+}
+
 /// Minimum version threshold for libstdc++ required when using prebuilt LLVM
 /// from CI (with`llvm.download-ci-llvm` option).
 const LIBSTDCXX_MIN_VERSION_THRESHOLD: usize = 8;
@@ -234,8 +238,9 @@ than building it.
             continue;
         }
 
-        // We don't use a C compiler on wasm32
-        if target.contains("wasm32") {
+        // PolyASM bytecode leaves the native C ABI out. Its C and C++ source frontends
+        // are provided by polytime rather than a target-triple C compiler.
+        if has_no_native_c_abi(target) {
             continue;
         }
 
@@ -271,6 +276,7 @@ than building it.
             // Check if it's a built-in target.
             has_target |= stage0_supported_target_list.contains(&target_str);
             has_target |= STAGE0_MISSING_TARGETS.contains(&target_str.as_str());
+            has_target |= build_helper::targets::POLYASM_TARGET_TUPLES.contains(&target_str.as_str());
 
             if !has_target {
                 // This might also be a custom target, so check the target file that could have been specified by the user.
@@ -322,7 +328,7 @@ than building it.
             .or_insert_with(|| Target::from_triple(&target.triple));
 
         // compiler-rt c fallbacks for wasm cannot be built with gcc
-        if target.contains("wasm")
+        if has_no_native_c_abi(target)
             && (*sess.config.optimized_compiler_builtins(*target)
                 != CompilerBuiltins::BuildRustOnly
                 || sess.config.rust_std_features.contains("compiler-builtins-c"))

@@ -1,4 +1,9 @@
-/// Configuration of cg_clif as passed in through `-Cllvm-args` and various env vars.
+use std::sync::OnceLock;
+
+use clap::Parser;
+use polyasm_format::options::BuildOptions;
+
+/// Configuration of cg_clif as passed in through `-Cllvm-args`.
 #[derive(Debug)]
 pub struct BackendConfig {
     /// Should the crate be AOT compiled or JIT executed.
@@ -7,24 +12,20 @@ pub struct BackendConfig {
     pub jit_mode: bool,
 
     /// When JIT mode is enable pass these arguments to the program.
-    ///
-    /// Defaults to the value of `CG_CLIF_JIT_ARGS`.
     pub jit_args: Vec<String>,
+}
+
+static BUILD_OPTIONS: OnceLock<BuildOptions> = OnceLock::new();
+
+pub fn build_options() -> &'static BuildOptions {
+    BUILD_OPTIONS.get_or_init(|| BuildOptions::parse_from(["rustc_codegen_cranelift"]))
 }
 
 impl BackendConfig {
     /// Parse the configuration passed in using `-Cllvm-args`.
     pub fn from_opts(opts: &[String]) -> Result<Self, String> {
-        let mut config = BackendConfig {
-            jit_mode: false,
-            jit_args: match std::env::var("CG_CLIF_JIT_ARGS") {
-                Ok(args) => args.split(' ').map(|arg| arg.to_string()).collect(),
-                Err(std::env::VarError::NotPresent) => vec![],
-                Err(std::env::VarError::NotUnicode(s)) => {
-                    panic!("CG_CLIF_JIT_ARGS not unicode: {:?}", s);
-                }
-            },
-        };
+        let mut config =
+            BackendConfig { jit_mode: false, jit_args: build_options().jit_args.clone() };
 
         for opt in opts {
             if opt.starts_with("-import-instr-limit") {

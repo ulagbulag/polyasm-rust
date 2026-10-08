@@ -41,6 +41,18 @@ pub(crate) fn build_sysroot(
     fs::create_dir_all(dist_dir.join("bin")).unwrap();
     fs::create_dir_all(dist_dir.join("lib")).unwrap();
 
+    let shared_utils_rlib = dirs.build_dir.join("libcg_clif_build_system.rlib");
+    let mut build_shared_utils_cmd = Command::new(&bootstrap_host_compiler.rustc);
+    build_shared_utils_cmd
+        .arg(dirs.source_dir.join("build_system/shared_utils.rs"))
+        .arg("--crate-name=cg_clif_build_system")
+        .arg("--crate-type=rlib")
+        .arg("--edition=2021")
+        .arg("-Cstrip=debuginfo")
+        .arg("-o")
+        .arg(&shared_utils_rlib);
+    spawn_and_wait(build_shared_utils_cmd);
+
     let is_native = bootstrap_host_compiler.target == target_tuple;
 
     let cg_clif_dylib_path = match cg_clif_dylib_src {
@@ -89,6 +101,12 @@ pub(crate) fn build_sysroot(
             .arg(&wrapper_path)
             .arg("-Cstrip=debuginfo")
             .arg("--check-cfg=cfg(support_panic_unwind)");
+        if wrapper == "cargo-clif" {
+            build_cargo_wrapper_cmd
+                .arg("--edition=2021")
+                .arg("--extern")
+                .arg(format!("cg_clif_build_system={}", shared_utils_rlib.display()));
+        }
         if config.panic_unwind_support {
             build_cargo_wrapper_cmd.arg("--cfg").arg("support_panic_unwind");
         }

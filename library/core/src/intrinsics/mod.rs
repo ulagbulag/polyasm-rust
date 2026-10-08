@@ -1325,11 +1325,17 @@ intrinsic_dispatch_on_type! {
     f16 => { sin(x as f32) as f16 }
     f32 => {
         cfg_select! {
+            target_abi = "polyasm" => crate::polyasm::intrinsics::fsin32(x),
             all(target_env = "msvc", target_arch = "x86") => sin(x as f64) as f32,
             _ => libm::likely_available::sinf(x),
         }
     }
-    f64 => { libm::likely_available::sin(x) }
+    f64 => {
+        cfg_select! {
+            target_abi = "polyasm" => crate::polyasm::intrinsics::fsin64(x),
+            _ => libm::likely_available::sin(x),
+        }
+    }
     f128 => { libm::maybe_available::sinf128(x) }
 }
 
@@ -1346,11 +1352,17 @@ intrinsic_dispatch_on_type! {
     f16 => { cos(x as f32) as f16 }
     f32 => {
         cfg_select! {
+            target_abi = "polyasm" => crate::polyasm::intrinsics::fcos32(x),
             all(target_env = "msvc", target_arch = "x86") => cos(x as f64) as f32,
             _ => libm::likely_available::cosf(x),
         }
     }
-    f64 => { libm::likely_available::cos(x) }
+    f64 => {
+        cfg_select! {
+            target_abi = "polyasm" => crate::polyasm::intrinsics::fcos64(x),
+            _ => libm::likely_available::cos(x),
+        }
+    }
     f128 => { libm::maybe_available::cosf128(x) }
 }
 
@@ -1367,11 +1379,17 @@ intrinsic_dispatch_on_type! {
     f16 => { powf(a as f32, x as f32) as f16 }
     f32 => {
         cfg_select! {
+            target_abi = "polyasm" => crate::polyasm::intrinsics::fpow32(a, x),
             all(target_env = "msvc", target_arch = "x86") => powf(a as f64, x as f64) as f32,
             _ => libm::likely_available::powf(a, x),
         }
     }
-    f64 => { libm::likely_available::pow(a, x) }
+    f64 => {
+        cfg_select! {
+            target_abi = "polyasm" => crate::polyasm::intrinsics::fpow64(a, x),
+            _ => libm::likely_available::pow(a, x),
+        }
+    }
     f128 => { libm::maybe_available::powf128(a, x) }
 }
 
@@ -1388,11 +1406,17 @@ intrinsic_dispatch_on_type! {
     f16 => { exp(x as f32) as f16 }
     f32 => {
         cfg_select! {
+            target_abi = "polyasm" => crate::polyasm::intrinsics::fexp32(x),
             all(target_env = "msvc", target_arch = "x86") => exp(x as f64) as f32,
             _ => libm::likely_available::expf(x),
         }
     }
-    f64 => { libm::likely_available::exp(x) }
+    f64 => {
+        cfg_select! {
+            target_abi = "polyasm" => crate::polyasm::intrinsics::fexp64(x),
+            _ => libm::likely_available::exp(x),
+        }
+    }
     f128 => { libm::maybe_available::expf128(x) }
 }
 
@@ -1430,11 +1454,17 @@ intrinsic_dispatch_on_type! {
     f16 => { log(x as f32) as f16 }
     f32 => {
         cfg_select! {
+            target_abi = "polyasm" => crate::polyasm::intrinsics::flog32(x),
             all(target_env = "msvc", target_arch = "x86") => log(x as f64) as f32,
             _ => libm::likely_available::logf(x),
         }
     }
-    f64 => { libm::likely_available::log(x) }
+    f64 => {
+        cfg_select! {
+            target_abi = "polyasm" => crate::polyasm::intrinsics::flog64(x),
+            _ => libm::likely_available::log(x),
+        }
+    }
     f128 => { libm::maybe_available::logf128(x) }
 }
 

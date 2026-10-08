@@ -201,8 +201,10 @@ pub fn format(
             override_builder.add(&format!("!{ignore}")).expect(&ignore);
         }
     }
-    let git_available =
-        helpers::git(None).allow_failure().arg("--version").run_capture(builder).is_success();
+    // The PolyASM source policy runs Git-free, so every file the ignore list
+    // leaves in is formatted, and the untracked and modified sets Git answers
+    // stay unread.
+    let git_available = false;
 
     let mut adjective = None;
     if git_available {
